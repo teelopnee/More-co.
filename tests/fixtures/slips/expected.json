@@ -1,0 +1,85 @@
+[
+  {
+    "file": "a-transfer-thai-short-year.png",
+    "qr": "0041000600000101030040220015307142236ATF012345102TH910436EA",
+    "amount": 1250,
+    "date": "2026-11-03",
+    "time": "14:22",
+    "from": "ธนพล",
+    "to": "แสงทอง",
+    "ref": "015307142236ATF01234",
+    "memo": "ค่าข้าว",
+    "bank": "kbank"
+  },
+  {
+    "file": "b-merchant-thai-full-year.png",
+    "qr": "0038000600000101030140217202611034h7Kp2Qx95102TH91049FB9",
+    "amount": 89,
+    "date": "2026-11-03",
+    "time": "08:15",
+    "from": "ธนพล",
+    "to": "ซีพี ออลล์",
+    "ref": "202611034h7Kp2Qx9",
+    "bank": "scb"
+  },
+  {
+    "file": "c-labels-left-loma.png",
+    "qr": null,
+    "amount": 3500,
+    "date": "2026-10-28",
+    "time": "09:05",
+    "from": "ธนพล",
+    "to": "สมศักดิ์",
+    "ref": "KTB2610280905117734",
+    "memo": "ค่าเช่าห้อง"
+  },
+  {
+    "file": "d-english.png",
+    "qr": "004000060000010103002021920261101BBL184055215102TH91048EE7",
+    "amount": 520,
+    "date": "2026-11-01",
+    "time": "18:40",
+    "from": "THANAPHON",
+    "to": "SUDARAT",
+    "ref": "20261101BBL18405521",
+    "bank": "bbl"
+  },
+  {
+    "file": "e-income-to-me.png",
+    "qr": "0041000600000101030060220017304170255BPM044115102TH9104F80A",
+    "amount": 15000,
+    "date": "2026-10-31",
+    "time": "17:02",
+    "from": "วิชัย",
+    "to": "ธนพล",
+    "ref": "017304170255BPM04411",
+    "memo": "เงินเดือน",
+    "bank": "ktb",
+    "income": true
+  },
+  {
+    "file": "f-payment-full-month.png",
+    "qr": null,
+    "amount": 65,
+    "date": "2026-11-02",
+    "time": "12:31",
+    "to": "ก๋วยเตี๋ยว",
+    "ref": "P2611021231009876"
+  },
+  {
+    "file": "g-colored-background.png",
+    "qr": "0041000600000101030040220015306201845ATF077885102TH910430CB",
+    "amount": 249.5,
+    "date": "2026-09-06",
+    "time": "20:18",
+    "from": "ธนพล",
+    "to": "ไลน์แมน",
+    "ref": "015306201845ATF07788",
+    "bank": "kbank"
+  },
+  {
+    "file": "h-not-a-slip.png",
+    "qr": null,
+    "notSlip": true
+  }
+]

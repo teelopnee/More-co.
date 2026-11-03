@@ -1,0 +1,45 @@
+{
+  "name": "jodwai",
+  "private": true,
+  "version": "0.1.0",
+  "description": "จดไว — แอปจดรายรับรายจ่ายที่อ่านสลิปโอนเงินได้ ทำงานในเครื่อง ไม่ส่งข้อมูลออก",
+  "type": "module",
+  "scripts": {
+    "postinstall": "node scripts/copy-ocr-assets.mjs",
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "e2e": "node tests/e2e/app.e2e.mjs"
+  },
+  "dependencies": {
+    "@fontsource/ibm-plex-sans-thai": "5.3.0",
+    "dexie": "4.4.7",
+    "dexie-react-hooks": "4.4.0",
+    "jsqr": "1.4.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "tesseract.js": "7.0.0"
+  },
+  "devDependencies": {
+    "@fontsource/sarabun": "5.3.0",
+    "@tesseract.js-data/eng": "1.0.0",
+    "@tesseract.js-data/tha": "1.0.0",
+    "@types/node": "22.19.1",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.2",
+    "fake-indexeddb": "6.2.5",
+    "qrcode": "1.5.4",
+    "typescript": "7.0.2",
+    "vite": "8.3.4",
+    "vite-plugin-pwa": "2.0.0",
+    "vitest": "5.0.5",
+    "workbox-build": "7.4.1",
+    "workbox-precaching": "7.4.1",
+    "workbox-routing": "7.4.1",
+    "workbox-strategies": "7.4.1",
+    "workbox-window": "7.4.1"
+  }
+}
