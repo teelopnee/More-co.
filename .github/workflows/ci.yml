@@ -1,0 +1,74 @@
+name: Build, test & publish
+
+# Every push: install, test and build every app in apps/ (scripts/build-site.mjs).
+# claude/* and ccr-* branches that pass are merged into main automatically
+# (turn off with the repository variable AUTO_MERGE=off).
+# main is published to GitHub Pages: a home page plus one folder per app.
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Test & build every app
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/*/package-lock.json
+      - run: node scripts/build-site.mjs
+      - if: github.ref == 'refs/heads/main'
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: _site
+
+  automerge:
+    name: Merge into main
+    needs: build
+    if: (startsWith(github.ref_name, 'claude/') || startsWith(github.ref_name, 'ccr-')) && vars.AUTO_MERGE != 'off'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.AUTOMERGE_TOKEN || github.token }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/*/package-lock.json
+      - run: bash .github/scripts/automerge.sh
+        env:
+          BRANCH: ${{ github.ref_name }}
+          HAS_PAT: ${{ secrets.AUTOMERGE_TOKEN != '' }}
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_FILE: ci.yml
+
+  deploy:
+    name: Publish to GitHub Pages
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

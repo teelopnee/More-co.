@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs';
 const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as { version: string };
 
 export default defineConfig({
-  // Relative base so the same build works on GitHub Pages (/More-co./) or any host.
+  // Relative base so the same build works under any sub-path (GitHub Pages serves it at /More-co./jodwai/).
   base: './',
   define: { __APP_VERSION__: JSON.stringify(pkg.version) },
   plugins: [

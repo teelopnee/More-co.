@@ -20,6 +20,7 @@
 ## พัฒนา
 
 ```bash
+cd apps/jodwai
 npm install          # ติดตั้ง + คัดลอกไฟล์ OCR ไปที่ public/ocr
 npm run dev          # เปิดเซิร์ฟเวอร์ทดสอบ
 npm test             # unit test + ทดสอบ OCR กับสลิปตัวอย่างจริง
@@ -44,9 +45,8 @@ npm run e2e          # ทดสอบทั้งแอปใน Chromium (ต�
 
 ## เผยแพร่
 
-GitHub Actions (`.github/workflows/deploy.yml`) จะรันเทสต์และ build ทุกครั้งที่ push
-และเผยแพร่ขึ้น GitHub Pages จาก branch หลักของ repo
-ต้องเปิดครั้งแรกที่ **Settings → Pages → Source: GitHub Actions**
+ทดสอบและเผยแพร่อัตโนมัติพร้อมแอปอื่นใน repo ที่ https://teelopnee.github.io/More-co./jodwai/
+ดูรายละเอียดใน [README หลัก](../../README.md)
 
 ## ข้อจำกัดที่รู้อยู่
 
