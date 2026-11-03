@@ -24,7 +24,8 @@ Sailing downwind is fastest; heading into the wind drops speed sharply.
 - **Ocean**: custom shader with 8 Gerstner waves, sky reflection with Fresnel, sun glitter, sub-surface tint on wave crests, see-through shallow water over the sand, and shoreline foam driven by a terrain height texture.
 - **Island**: procedural heightfield (domain-warped noise, headlands, sea stacks) shaded with scanned sand, grass and rock textures (triplanar on cliffs), lined with photogrammetry cliff and rock models.
 - **Ships and props**: scanned / hand-modelled CC0 models: the player's pinnace, an anchored galleon and fluyt, a wooden pier, a coastal fort, channel markers, crates and barrels.
-- **Effects**: foam wake with Kelvin arms, bow spray, buoyancy from the same wave function, synthesized sea / wind audio.
+- **Effects**: foam wake with Kelvin arms, hull and bow-wave foam, bow spray, buoyancy from the same wave function, gulls wheeling over the cliffs and the ship, synthesized sea / wind audio.
+- **Post-processing**: the scene renders into a 4x-MSAA HDR buffer, then gets bloom (dual-filter), screen-space sun shafts through masts and cliffs, a filmic tone curve with golden-hour grading, vignette and dithering. The photographed sky is run through the inverse of the tone curve so it comes out looking like the original photo while its brightest parts still bloom.
 
 ### Run locally
 
