@@ -1,0 +1,417 @@
+{
+  "asset": {
+    "generator": "glTF-Transform v4.5.1",
+    "version": "2.0"
+  },
+  "accessors": [
+    {
+      "type": "SCALAR",
+      "componentType": 5123,
+      "count": 2952,
+      "bufferView": 0,
+      "byteOffset": 0
+    },
+    {
+      "type": "SCALAR",
+      "componentType": 5123,
+      "count": 70404,
+      "bufferView": 0,
+      "byteOffset": 5904
+    },
+    {
+      "type": "SCALAR",
+      "componentType": 5123,
+      "count": 28368,
+      "bufferView": 0,
+      "byteOffset": 146712
+    },
+    {
+      "type": "VEC3",
+      "componentType": 5122,
+      "count": 618,
+      "max": [
+        18822,
+        32767,
+        26235
+      ],
+      "min": [
+        -18822,
+        -32767,
+        -26235
+      ],
+      "normalized": true,
+      "bufferView": 1,
+      "byteOffset": 0
+    },
+    {
+      "type": "VEC3",
+      "componentType": 5122,
+      "count": 618,
+      "normalized": true,
+      "bufferView": 1,
+      "byteOffset": 8
+    },
+    {
+      "type": "VEC2",
+      "componentType": 5123,
+      "count": 618,
+      "normalized": true,
+      "bufferView": 1,
+      "byteOffset": 16
+    },
+    {
+      "type": "VEC3",
+      "componentType": 5122,
+      "count": 17580,
+      "max": [
+        5720,
+        11945,
+        32767
+      ],
+      "min": [
+        -5720,
+        -11945,
+        -32767
+      ],
+      "normalized": true,
+      "bufferView": 2,
+      "byteOffset": 0
+    },
+    {
+      "type": "VEC3",
+      "componentType": 5122,
+      "count": 17580,
+      "normalized": true,
+      "bufferView": 2,
+      "byteOffset": 8
+    },
+    {
+      "type": "VEC2",
+      "componentType": 5123,
+      "count": 17580,
+      "normalized": true,
+      "bufferView": 2,
+      "byteOffset": 16
+    },
+    {
+      "type": "VEC4",
+      "componentType": 5121,
+      "count": 17580,
+      "normalized": true,
+      "bufferView": 2,
+      "byteOffset": 20
+    },
+    {
+      "type": "VEC3",
+      "componentType": 5122,
+      "count": 6350,
+      "max": [
+        8213,
+        19898,
+        32767
+      ],
+      "min": [
+        -8213,
+        -19898,
+        -32767
+      ],
+      "normalized": true,
+      "bufferView": 3,
+      "byteOffset": 0
+    },
+    {
+      "type": "VEC3",
+      "componentType": 5122,
+      "count": 6350,
+      "normalized": true,
+      "bufferView": 3,
+      "byteOffset": 8
+    },
+    {
+      "type": "VEC2",
+      "componentType": 5123,
+      "count": 6350,
+      "normalized": true,
+      "bufferView": 3,
+      "byteOffset": 16
+    },
+    {
+      "type": "VEC4",
+      "componentType": 5121,
+      "count": 6350,
+      "normalized": true,
+      "bufferView": 3,
+      "byteOffset": 20
+    }
+  ],
+  "bufferViews": [
+    {
+      "buffer": 0,
+      "byteOffset": 0,
+      "byteLength": 203448,
+      "target": 34963
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 203448,
+      "byteLength": 12360,
+      "byteStride": 20,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 215808,
+      "byteLength": 421920,
+      "byteStride": 24,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 637728,
+      "byteLength": 152400,
+      "byteStride": 24,
+      "target": 34962
+    }
+  ],
+  "samplers": [
+    {
+      "magFilter": 9729,
+      "minFilter": 9987,
+      "wrapS": 10497,
+      "wrapT": 10497
+    }
+  ],
+  "textures": [
+    {
+      "sampler": 0,
+      "extensions": {
+        "EXT_texture_webp": {
+          "source": 1
+        }
+      }
+    },
+    {
+      "sampler": 0,
+      "extensions": {
+        "EXT_texture_webp": {
+          "source": 0
+        }
+      }
+    },
+    {
+      "sampler": 0,
+      "extensions": {
+        "EXT_texture_webp": {
+          "source": 2
+        }
+      }
+    },
+    {
+      "sampler": 0,
+      "extensions": {
+        "EXT_texture_webp": {
+          "source": 4
+        }
+      }
+    },
+    {
+      "sampler": 0,
+      "extensions": {
+        "EXT_texture_webp": {
+          "source": 3
+        }
+      }
+    },
+    {
+      "sampler": 0,
+      "extensions": {
+        "EXT_texture_webp": {
+          "source": 5
+        }
+      }
+    }
+  ],
+  "images": [
+    {
+      "name": "modular_wooden_pier_poles_nor_gl",
+      "mimeType": "image/webp",
+      "uri": "textures/modular_wooden_pier_poles_nor_gl_1k.webp"
+    },
+    {
+      "name": "modular_wooden_pier_poles_diff",
+      "mimeType": "image/webp",
+      "uri": "textures/modular_wooden_pier_poles_diff_1k.webp"
+    },
+    {
+      "name": "modular_wooden_pier_poles_rough",
+      "mimeType": "image/webp",
+      "uri": "textures/modular_wooden_pier_poles_arm_1k.webp"
+    },
+    {
+      "name": "modular_wooden_pier_planks_nor_gl",
+      "mimeType": "image/webp",
+      "uri": "textures/modular_wooden_pier_planks_nor_gl_1k.webp"
+    },
+    {
+      "name": "modular_wooden_pier_planks_diff",
+      "mimeType": "image/webp",
+      "uri": "textures/modular_wooden_pier_planks_diff_1k.webp"
+    },
+    {
+      "name": "modular_wooden_pier_planks_metal-modular_wooden_pier_planks_rough",
+      "mimeType": "image/webp",
+      "uri": "textures/modular_wooden_pier_planks_arm_1k.webp"
+    }
+  ],
+  "buffers": [
+    {
+      "uri": "modular_wooden_pier.bin",
+      "byteLength": 790128
+    }
+  ],
+  "materials": [
+    {
+      "name": "modular_wooden_pier_poles",
+      "doubleSided": true,
+      "pbrMetallicRoughness": {
+        "metallicFactor": 0,
+        "baseColorTexture": {
+          "index": 0
+        },
+        "metallicRoughnessTexture": {
+          "index": 2
+        }
+      },
+      "normalTexture": {
+        "index": 1
+      }
+    },
+    {
+      "name": "modular_wooden_pier_planks",
+      "doubleSided": true,
+      "pbrMetallicRoughness": {
+        "baseColorTexture": {
+          "index": 3
+        },
+        "metallicRoughnessTexture": {
+          "index": 5
+        }
+      },
+      "normalTexture": {
+        "index": 4
+      }
+    }
+  ],
+  "meshes": [
+    {
+      "name": "mesh.013",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 3,
+            "NORMAL": 4,
+            "TEXCOORD_0": 5
+          },
+          "mode": 4,
+          "material": 0,
+          "indices": 0
+        }
+      ]
+    },
+    {
+      "name": "Plane.040",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 6,
+            "NORMAL": 7,
+            "TEXCOORD_0": 8,
+            "COLOR_0": 9
+          },
+          "mode": 4,
+          "material": 1,
+          "indices": 1
+        }
+      ]
+    },
+    {
+      "name": "Plane.052",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 10,
+            "NORMAL": 11,
+            "TEXCOORD_0": 12,
+            "COLOR_0": 13
+          },
+          "mode": 4,
+          "material": 0,
+          "indices": 2
+        }
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "name": "modular_wooden_pier_poles",
+      "translation": [
+        0.03332339972257614,
+        1.2242874503135681,
+        5.511393949389458
+      ],
+      "scale": [
+        1.9240582585334778,
+        1.9240582585334778,
+        1.9240582585334778
+      ],
+      "mesh": 0
+    },
+    {
+      "name": "modular_wooden_pier_planks",
+      "translation": [
+        0.012926965951919556,
+        3.5141857266426086,
+        -4.341221332550049
+      ],
+      "scale": [
+        7.633245944976807,
+        7.633245944976807,
+        7.633245944976807
+      ],
+      "mesh": 1
+    },
+    {
+      "name": "modular_wooden_pier_section_01",
+      "translation": [
+        0.02399122714996338,
+        2.762647569179535,
+        -5.755144476890564
+      ],
+      "scale": [
+        6.1860305070877075,
+        6.1860305070877075,
+        6.1860305070877075
+      ],
+      "mesh": 2
+    }
+  ],
+  "scenes": [
+    {
+      "name": "Scene",
+      "nodes": [
+        0,
+        1,
+        2
+      ]
+    }
+  ],
+  "scene": 0,
+  "extensionsUsed": [
+    "EXT_texture_webp",
+    "KHR_mesh_quantization"
+  ],
+  "extensionsRequired": [
+    "EXT_texture_webp",
+    "KHR_mesh_quantization"
+  ]
+}

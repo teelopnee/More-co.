@@ -1,0 +1,188 @@
+{
+  "asset": {
+    "generator": "glTF-Transform v4.5.1",
+    "version": "2.0"
+  },
+  "accessors": [
+    {
+      "type": "SCALAR",
+      "componentType": 5123,
+      "count": 19518,
+      "bufferView": 0,
+      "byteOffset": 0
+    },
+    {
+      "type": "VEC3",
+      "componentType": 5122,
+      "count": 7110,
+      "max": [
+        14397,
+        32767,
+        14397
+      ],
+      "min": [
+        -14397,
+        -32767,
+        -14397
+      ],
+      "normalized": true,
+      "bufferView": 1,
+      "byteOffset": 0
+    },
+    {
+      "type": "VEC3",
+      "componentType": 5122,
+      "count": 7110,
+      "normalized": true,
+      "bufferView": 1,
+      "byteOffset": 8
+    },
+    {
+      "type": "VEC2",
+      "componentType": 5123,
+      "count": 7110,
+      "normalized": true,
+      "bufferView": 1,
+      "byteOffset": 16
+    }
+  ],
+  "bufferViews": [
+    {
+      "buffer": 0,
+      "byteOffset": 0,
+      "byteLength": 39036,
+      "target": 34963
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 39036,
+      "byteLength": 142200,
+      "byteStride": 20,
+      "target": 34962
+    }
+  ],
+  "samplers": [
+    {
+      "magFilter": 9729,
+      "minFilter": 9987,
+      "wrapS": 10497,
+      "wrapT": 10497
+    }
+  ],
+  "textures": [
+    {
+      "sampler": 0,
+      "extensions": {
+        "EXT_texture_webp": {
+          "source": 1
+        }
+      }
+    },
+    {
+      "sampler": 0,
+      "extensions": {
+        "EXT_texture_webp": {
+          "source": 0
+        }
+      }
+    },
+    {
+      "sampler": 0,
+      "extensions": {
+        "EXT_texture_webp": {
+          "source": 2
+        }
+      }
+    }
+  ],
+  "images": [
+    {
+      "name": "lateral_sea_marker_nor_gl",
+      "mimeType": "image/webp",
+      "uri": "textures/lateral_sea_marker_nor_gl_1k.webp"
+    },
+    {
+      "name": "lateral_sea_marker_diff",
+      "mimeType": "image/webp",
+      "uri": "textures/lateral_sea_marker_diff_1k.webp"
+    },
+    {
+      "name": "lateral_sea_marker_metal-lateral_sea_marker_rough",
+      "mimeType": "image/webp",
+      "uri": "textures/lateral_sea_marker_arm_1k.webp"
+    }
+  ],
+  "buffers": [
+    {
+      "uri": "lateral_sea_marker.bin",
+      "byteLength": 181236
+    }
+  ],
+  "materials": [
+    {
+      "name": "lateral_sea_marker",
+      "doubleSided": true,
+      "pbrMetallicRoughness": {
+        "baseColorTexture": {
+          "index": 0
+        },
+        "metallicRoughnessTexture": {
+          "index": 2
+        }
+      },
+      "normalTexture": {
+        "index": 1
+      }
+    }
+  ],
+  "meshes": [
+    {
+      "name": "Cylinder.001",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 1,
+            "NORMAL": 2,
+            "TEXCOORD_0": 3
+          },
+          "mode": 4,
+          "material": 0,
+          "indices": 0
+        }
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "name": "lateral_sea_marker",
+      "translation": [
+        -5.960464477539063e-8,
+        2.1375189423561096,
+        0
+      ],
+      "scale": [
+        3.419353425502777,
+        3.419353425502777,
+        3.419353425502777
+      ],
+      "mesh": 0
+    }
+  ],
+  "scenes": [
+    {
+      "name": "Scene",
+      "nodes": [
+        0
+      ]
+    }
+  ],
+  "scene": 0,
+  "extensionsUsed": [
+    "EXT_texture_webp",
+    "KHR_mesh_quantization"
+  ],
+  "extensionsRequired": [
+    "EXT_texture_webp",
+    "KHR_mesh_quantization"
+  ]
+}
