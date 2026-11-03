@@ -36,6 +36,10 @@ python3 -m http.server 8000
 # open http://localhost:8000/
 ```
 
+### Asset format
+
+Each model lives in `sunset-cove/assets/models/<name>/` as `<name>.json`: standard glTF JSON whose single geometry buffer is base64-packed into a `_bin` field, plus WebP textures referenced by relative path. The page rebuilds an in-memory GLB before handing it to `GLTFLoader`, so only plain web file types (`.json`, `.webp`, `.jpg`, `.txt`) are fetched. The HDR sky for lighting is base64 text in `sky_env.txt`.
+
 ### Credits
 
 - 3D models, HDRI sky and PBR textures: [Poly Haven](https://polyhaven.com) (CC0). Models were simplified and their textures converted to WebP for the web.

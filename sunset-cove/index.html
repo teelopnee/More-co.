@@ -828,7 +828,43 @@ function showLoad() {
   const f = loadFrac * 0.8 + terrainFrac * 0.2;
   $('loadFill').style.width = (f * 100).toFixed(1) + '%';
 }
-const loadModel = (n) => new Promise((res, rej) => gltf.load(`${ASSET}models/${n}/${n}.gltf`, (g) => res(g.scene), undefined, rej));
+// Models ship as glTF JSON with the geometry buffer base64-packed inside (served as .json);
+// they are reassembled into an in-memory GLB so only plain web file types are fetched.
+function b64Bytes(str) { const bin = atob(str), out = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i); return out; }
+function packGLB(json, bin) {
+  const jb = new TextEncoder().encode(JSON.stringify(json));
+  const jpad = (4 - jb.length % 4) % 4, bpad = (4 - bin.length % 4) % 4;
+  const total = 12 + 8 + jb.length + jpad + 8 + bin.length + bpad;
+  const buf = new ArrayBuffer(total), dv = new DataView(buf), u8 = new Uint8Array(buf);
+  dv.setUint32(0, 0x46546C67, true); dv.setUint32(4, 2, true); dv.setUint32(8, total, true);
+  dv.setUint32(12, jb.length + jpad, true); dv.setUint32(16, 0x4E4F534A, true);
+  u8.set(jb, 20); u8.fill(0x20, 20 + jb.length, 20 + jb.length + jpad);
+  const o = 20 + jb.length + jpad;
+  dv.setUint32(o, bin.length + bpad, true); dv.setUint32(o + 4, 0x004E4942, true); u8.set(bin, o + 8);
+  return buf;
+}
+async function fetchOk(url, kind) { const r = await fetch(url); if (!r.ok) throw new Error(`${url}: ${r.status}`); return kind === 'json' ? r.json() : r.text(); }
+async function loadModel(n) {
+  const base = `${ASSET}models/${n}/`;
+  manager.itemStart(base);
+  try {
+    const json = await fetchOk(base + n + '.json', 'json');
+    const bin = b64Bytes(json._bin); delete json._bin;
+    json.buffers[0].byteLength = bin.length;
+    return await new Promise((res, rej) => gltf.parse(packGLB(json, bin), base, (g) => res(g.scene), rej));
+  } finally { manager.itemEnd(base); }
+}
+async function loadHDR(url) {
+  manager.itemStart(url);
+  try {
+    const bytes = b64Bytes(await fetchOk(url, 'text'));
+    const d = new RGBELoader().parse(bytes.buffer);
+    const t = new THREE.DataTexture(d.data, d.width, d.height, THREE.RGBAFormat, d.type);
+    t.colorSpace = THREE.LinearSRGBColorSpace; t.flipY = true; t.generateMipmaps = false;
+    t.minFilter = t.magFilter = THREE.LinearFilter; t.needsUpdate = true;
+    return t;
+  } finally { manager.itemEnd(url); }
+}
 const loadTex = (f, srgb, repeat = true) => new Promise((res, rej) => texLoader.load(ASSET + f, (t) => {
   t.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
   if (repeat) t.wrapS = t.wrapT = THREE.RepeatWrapping;
@@ -1516,7 +1552,7 @@ function frame() {
 async function boot() {
   hud.init();
   const pmrem = new THREE.PMREMGenerator(renderer);
-  const hdrP = new Promise((res, rej) => new RGBELoader(manager).load(ASSET + 'sky_env.hdr', res, undefined, rej));
+  const hdrP = loadHDR(ASSET + 'sky_env.txt');
   const skyP = loadTex('sky.jpg', false, false);
   const texP = Promise.all([
     loadTex('sand_diff.webp', true), loadTex('sand_nor.webp', false), loadTex('sand_arm.webp', false),
