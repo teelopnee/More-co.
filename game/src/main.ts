@@ -68,6 +68,7 @@ class App {
   private fpsAcc = 0;
   private fpsFrames = 0;
   private reported = false;
+  private readonly coarse = matchMedia('(pointer: coarse)').matches;
 
   constructor() {
     this.root = document.getElementById('game') as HTMLDivElement;
@@ -81,6 +82,7 @@ class App {
     this.fx = new Effects(this.engine.scene, QUALITY[this.level], this.engine.camera);
     this.director = new Director(this.engine);
     this.hud = new Hud(this.root);
+    this.input.rumbleOn = this.settings.rumble;
     this.touch = new TouchControls(this.input, this.root);
     this.tuner = new AutoTuner((steps) => this.downgrade(steps));
     this.tuner.enabled = this.settings.quality === 'auto';
@@ -97,6 +99,7 @@ class App {
       toTitle: () => this.toTitle(),
       sound: (k) => sound.ui(k),
       modeChanged: () => this.updateChrome(),
+      versusInput: (on) => this.input.setVersus(on),
     });
 
     this.input.onMenu = (a, p) => this.onMenu(a, p);
@@ -184,6 +187,7 @@ class App {
 
   private onSettings(s: Settings) {
     saveSettings(s);
+    this.input.rumbleOn = s.rumble;
     sound.setVolumes(s.music, s.sfx);
     this.hud.fps.hidden = !s.fps;
     const want = s.quality === 'auto' ? autoStartLevel(s.autoCap) : s.quality;
@@ -262,7 +266,7 @@ class App {
     this.difficulty = difficulty;
     const fight = new Fight(p1, p2, { training: mode === 'training', roundSeconds: this.settings.roundTime, skipIntro: autoplay });
     this.buildMatch(mode, p1, p2, fight);
-    this.input.shareKeys = mode !== 'versus';
+    this.input.setVersus(mode === 'versus');
     this.cpus = [
       autoplay ? new CpuController(0, 'hard') : null,
       mode === 'cpu' ? new CpuController(1, difficulty) : null,
@@ -307,7 +311,8 @@ class App {
 
   private updateChrome() {
     const fighting = this.isFighting() && !this.paused && !this.screens.name;
-    const coarse = matchMedia('(pointer: coarse)').matches || this.input.lastDevice === 'touch';
+    const last = this.input.lastDevice;
+    const coarse = last === 'touch' || (last === 'none' && this.coarse);
     this.touch.show(fighting && coarse && this.kind !== 'versus');
     this.root.classList.toggle('in-fight', fighting);
     this.root.classList.toggle('in-menu', !!this.screens.name);
@@ -460,6 +465,11 @@ class App {
           const k = e.blocked ? 0.4 : 1;
           this.director.shake((e.strength === 'heavy' ? 0.42 : e.strength === 'medium' ? 0.24 : e.strength === 'super' ? 0.16 : 0.13) * k);
           if (!e.blocked && (e.strength === 'heavy' || e.counter)) this.director.punch(e.counter ? 1.2 : 1, tmp.set(e.x, e.y, 0));
+          if (loud) {
+            const k2 = e.strength === 'heavy' ? 1 : e.strength === 'medium' ? 0.6 : e.strength === 'super' ? 0.5 : 0.35;
+            if (!this.cpus[e.def]) this.input.rumble(e.def, e.blocked ? 0.15 : 0.7 * k2, e.blocked ? 0.35 : 0.5 * k2, e.blocked ? 60 : 90 + k2 * 90);
+            if (!this.cpus[e.att]) this.input.rumble(e.att, 0.15 * k2, 0.35 * k2, 50);
+          }
           if (e.counter && loud) this.hud.callout(e.att, 'เคาน์เตอร์!');
           break;
         }

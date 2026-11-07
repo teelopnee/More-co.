@@ -1,5 +1,6 @@
 // Keyboard, gamepad and touch merged into per-player input frames.
 import type { InputFrame } from '../sim/fight';
+import { PadTracker, type PadSnapshot } from './pads';
 
 export type Action = 'left' | 'right' | 'up' | 'down' | 'p' | 'k' | 's' | 'u';
 export type MenuAction = 'up' | 'down' | 'left' | 'right' | 'ok' | 'back' | 'pause';
@@ -41,15 +42,24 @@ export class Input {
   shareKeys = true;
   onMenu: ((a: MenuAction, player: number) => void) | null = null;
   onAny: (() => void) | null = null;
-  private readonly padPrev: Record<number, boolean[]> = {};
-  private readonly padMenuPrev: Record<number, boolean[]> = {};
+  readonly pads = new PadTracker();
   private gamepadsBlocked = false;
-  lastDevice: 'keyboard' | 'pad' | 'touch' = 'keyboard';
+  lastDevice: 'none' | 'keyboard' | 'pad' | 'touch' = 'none';
+  rumbleOn = true;
 
   constructor() {
     window.addEventListener('keydown', (e) => this.key(e, true));
     window.addEventListener('keyup', (e) => this.key(e, false));
     window.addEventListener('blur', () => this.releaseAll());
+    // Pads are polled well above the frame rate so quick taps are not lost when frames are slow.
+    if (typeof navigator !== 'undefined' && 'getGamepads' in navigator) window.setInterval(() => this.poll(), 8);
+  }
+
+  /** Two-player mode: P2 keys and the second pad drive player 2. */
+  setVersus(on: boolean) {
+    this.shareKeys = !on;
+    this.pads.mode = on ? 'versus' : 'single';
+    this.clearPressed();
   }
 
   private key(e: KeyboardEvent, down: boolean) {
@@ -85,38 +95,31 @@ export class Input {
     this.lastDevice = 'touch';
   }
 
-  /** Poll gamepads; call once per rendered frame. */
+  /** Poll gamepads (also runs on its own timer). */
   poll() {
     if (this.gamepadsBlocked || !navigator.getGamepads) return;
-    let pads: (Gamepad | null)[];
-    try { pads = navigator.getGamepads(); } catch { this.gamepadsBlocked = true; return; }
-    let idx = 0;
-    for (const gp of pads) {
-      if (!gp || !gp.connected) continue;
-      const player = this.shareKeys ? 0 : Math.min(1, idx);
-      idx++;
-      const slot = this.slots[player];
-      const b = (i: number) => !!gp.buttons[i]?.pressed;
-      const ax = gp.axes[0] ?? 0, ay = gp.axes[1] ?? 0;
-      const state: Record<Action, boolean> = {
-        left: b(14) || ax < -0.45, right: b(15) || ax > 0.45, up: b(12) || ay < -0.55, down: b(13) || ay > 0.55,
-        p: b(2), k: b(0), s: b(1), u: b(3) || b(5) || b(7),
-      };
-      const prev = this.padPrev[gp.index] ?? [];
-      ACTIONS.forEach((a, i) => {
-        if (state[a] && !prev[i]) { slot.pressed.add(a); this.lastDevice = 'pad'; this.onAny?.(); }
-        slot.pad[a] = state[a];
-      });
-      // Menu events from the pad (edge-triggered).
-      const menuMap: [boolean, MenuAction][] = [
-        [state.up, 'up'], [state.down, 'down'], [state.left, 'left'], [state.right, 'right'],
-        [b(0), 'ok'], [b(1), 'back'], [b(9), 'pause'],
-      ];
-      const mPrev = this.padMenuPrev[gp.index];
-      menuMap.forEach(([v, m], i) => { if (v && !mPrev?.[i]) this.onMenu?.(m, player); });
-      this.padMenuPrev[gp.index] = menuMap.map(([v]) => v);
-      this.padPrev[gp.index] = ACTIONS.map((a) => state[a]);
+    let list: (Gamepad | null)[];
+    try { list = navigator.getGamepads(); } catch { this.gamepadsBlocked = true; return; }
+    const frame = this.pads.read(list as unknown as (PadSnapshot | null)[], performance.now() / 1000);
+    for (let p = 0; p < 2; p++) {
+      const slot = this.slots[p];
+      slot.pad = frame.held[p];
+      for (const a of frame.pressed[p]) slot.pressed.add(a);
     }
+    if (frame.used) { this.lastDevice = 'pad'; this.onAny?.(); }
+    for (const m of frame.menu) this.onMenu?.(m.action, this.shareKeys ? 0 : m.player);
+  }
+
+  /** Rumble the pads held by a player. Silently does nothing where vibration is unsupported. */
+  rumble(player: number, strong: number, weak: number, ms: number) {
+    if (!this.rumbleOn || this.gamepadsBlocked || !navigator.getGamepads) return;
+    try {
+      for (const gp of navigator.getGamepads()) {
+        if (!gp || this.pads.playerOf(gp.index) !== player) continue;
+        const act = (gp as Gamepad & { vibrationActuator?: { playEffect?: (t: string, o: object) => Promise<unknown> } }).vibrationActuator;
+        act?.playEffect?.('dual-rumble', { startDelay: 0, duration: ms, strongMagnitude: strong, weakMagnitude: weak })?.catch(() => {});
+      }
+    } catch { /* ignore */ }
   }
 
   /** Consume one simulation step of input for a player. */

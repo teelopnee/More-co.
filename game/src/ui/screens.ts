@@ -15,11 +15,12 @@ export interface Settings {
   difficulty: Difficulty;
   roundTime: number;
   effects: number;
+  rumble: boolean;
   /** Lowest preset "auto" has needed on this device; later sessions start there. */
   autoCap: QualityLevel | null;
 }
 
-export const DEFAULT_SETTINGS: Settings = { quality: 'auto', fps: false, music: 0.6, sfx: 0.9, difficulty: 'normal', roundTime: 99, effects: 1, autoCap: null };
+export const DEFAULT_SETTINGS: Settings = { quality: 'auto', fps: false, music: 0.6, sfx: 0.9, difficulty: 'normal', roundTime: 99, effects: 1, rumble: true, autoCap: null };
 
 const hex = (n: number) => `#${n.toString(16).padStart(6, '0')}`;
 
@@ -115,6 +116,8 @@ export interface ScreenHooks {
   toTitle(): void;
   sound(kind: 'move' | 'ok' | 'back'): void;
   modeChanged(screen: string): void;
+  /** Two-player menus need P2's keys and pad routed to player 2. */
+  versusInput(on: boolean): void;
 }
 
 export class Screens {
@@ -155,6 +158,7 @@ export class Screens {
   // ───────────────────────────── title ─────────────────────────────
 
   title() {
+    this.hooks.versusInput(false);
     const el = document.createElement('section');
     el.className = 'scr title';
     el.innerHTML = `
@@ -184,6 +188,7 @@ export class Screens {
 
   select(mode: Mode) {
     this.selectMode = mode;
+    this.hooks.versusInput(mode === 'versus');
     this.selStep = 'p1';
     this.picked = [null, null];
     this.cursor = [0, 1];
@@ -328,6 +333,7 @@ export class Screens {
         label: 'เอฟเฟกต์อนุภาค', options: [{ label: 'ปกติ', value: 1 }, { label: 'จัดเต็ม ×1.5', value: 1.5 }, { label: 'เบาลง', value: 0.6 }],
         get: () => s.effects, set: (v) => { s.effects = v as number; ch(); },
       },
+      { label: 'สั่นจอย', options: [{ label: 'เปิด', value: true }, { label: 'ปิด', value: false }], get: () => s.rumble, set: (v) => { s.rumble = v as boolean; ch(); } },
       { label: 'แสดง FPS', options: [{ label: 'ปิด', value: false }, { label: 'เปิด', value: true }], get: () => s.fps, set: (v) => { s.fps = v as boolean; ch(); } },
       { label: 'เพลง', options: vol, get: () => s.music, set: (v) => { s.music = v as number; ch(); } },
       { label: 'เสียงเอฟเฟกต์', options: vol, get: () => s.sfx, set: (v) => { s.sfx = v as number; ch(); } },
@@ -364,6 +370,7 @@ export class Screens {
             <tr><td>หยุดเกม</td><td colspan="2"><kbd>Esc</kbd></td><td>Start</td></tr>
           </table>
           <p class="note">ป้องกัน: กดถอยหลังค้าง (ย่อ + ถอย กันท่าต่ำ) · กดเดินหน้า/ถอยสองครั้งเร็ว ๆ = พุ่งตัว · มือถือใช้จอยสติ๊กซ้ายกับปุ่มขวา</p>
+          <p class="note">สองผู้เล่น: จอยตัวเดียว = ผู้เล่น 2 (ผู้เล่น 1 ใช้คีย์บอร์ด) · จอยสองตัว = ตัวที่กดปุ่มก่อนเป็นผู้เล่น 1</p>
         </div>
         <div class="help-col">
           <h3>ท่า</h3>
