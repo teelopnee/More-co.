@@ -485,7 +485,7 @@ export class Effects {
   ring(pos: Vector3, color: [number, number, number], size: number, life: number, flat = false, thick = 0.08) {
     const r = this.rings.find((x) => x.life <= 0) ?? this.rings[0];
     r.mesh.position.copy(pos);
-    (r.mat.uniforms.uColor.value as Color).setRGB(...color);
+    (r.mat.uniforms.uColor.value as Color).setRGB(color[0] * 0.45, color[1] * 0.45, color[2] * 0.45);
     r.mat.uniforms.uThick.value = thick;
     r.life = r.max = life;
     r.size = size;
@@ -509,14 +509,14 @@ export class Effects {
         this.add.emit({ x, y, z, vx: Math.cos(a) * s, vy: Math.sin(a) * s + 1, vz: rnd(-2, 2), life: rnd(0.15, 0.3), size: 0.035, r: c[0], g: c[1], b: c[2], stretch: 0.05, drag: 4, gravity: -8 });
       }
       this.ring(pos, c, 1.4 + big, 0.22, false, 0.12);
-      this.flashLight(pos, 0x88aaff, 40 * big, 0.12);
+      this.flashLight(pos, 0x88aaff, 10 * big, 0.1);
       return;
     }
     const [r, g, b] = hdr(d.accent, 4.5);
     const [r2, g2, b2] = hdr(d.accent2, 5);
     // Core flash + soft glow.
-    this.add.emit({ x, y, z, life: 0.09, size: 1.1 + big * 1.8, sizeEnd: 0.3, r: 5, g: 5, b: 5 });
-    this.add.emit({ x, y, z, life: 0.28, size: 2.2 + big * 2.6, sizeEnd: 3.5 + big * 3, r: r * 0.25, g: g * 0.25, b: b * 0.25 });
+    this.add.emit({ x, y, z, life: 0.08, size: 0.5 + big * 0.9, sizeEnd: 0.2, r: 3, g: 3, b: 3 });
+    this.add.emit({ x, y, z, life: 0.24, size: 0.9 + big * 1.1, sizeEnd: 1.6 + big * 1.4, r: r * 0.12, g: g * 0.12, b: b * 0.12 });
     const count = this.n(strength === 'super' ? 14 : 16 + big * 40);
     for (let i = 0; i < count; i++) {
       const a = rnd(-1.4, 1.4) + (dir > 0 ? 0 : Math.PI);
@@ -537,7 +537,7 @@ export class Effects {
     }
     this.ring(pos, [r, g, b], 1.2 + big * 2.6, 0.18 + big * 0.12);
     if (strength === 'heavy' || counter) this.ring(pos, counter ? [5, 1.6, 0.6] : [r2, g2, b2], 2.4 + big * 2, 0.32, false, 0.05);
-    this.flashLight(pos, d.accent, 50 + big * 160, 0.12 + big * 0.12);
+    this.flashLight(pos, d.accent, 10 + big * 28, 0.1 + big * 0.1);
     if (attacker === 'vayu' && this.quality.detail >= 0.6) this.zap(pos, 0.9 + big, 3 + Math.round(big * 4));
     if (attacker === 'phloeng') this.flames(pos, 0.5 + big, this.n(8 + big * 12));
     if (attacker === 'chantra') this.sparkles(pos, 0.8 + big, this.n(10 + big * 14));
@@ -574,7 +574,7 @@ export class Effects {
 
   clash(x: number, y: number) {
     const pos = v.set(x, y, 0.2);
-    this.add.emit({ x, y, z: 0.2, life: 0.15, size: 4, sizeEnd: 1, r: 6, g: 6, b: 6 });
+    this.add.emit({ x, y, z: 0.2, life: 0.14, size: 1.8, sizeEnd: 0.5, r: 3, g: 3, b: 3 });
     for (let i = 0; i < this.n(70); i++) {
       const a = Math.random() * Math.PI * 2;
       const s = rnd(4, 18);
@@ -582,7 +582,7 @@ export class Effects {
     }
     this.ring(pos, [4, 4, 5], 5, 0.4);
     this.ring(pos, [3, 2, 1], 3, 0.25);
-    this.flashLight(pos, 0xffffff, 250, 0.3);
+    this.flashLight(pos, 0xffffff, 50, 0.25);
   }
 
   dust(x: number, z: number, amount: number) {
@@ -616,7 +616,7 @@ export class Effects {
     if (!p) {
       const group = new Group();
       const [r, g, b] = hdr(d.accent, char === 'phloeng' ? 3 : 3.5);
-      const core = new Mesh(new SphereGeometry(char === 'phloeng' ? 0.42 : 0.32, 24, 16), coreMaterial([r, g, b], 2.5));
+      const core = new Mesh(new SphereGeometry(char === 'phloeng' ? 0.38 : 0.28, 24, 16), coreMaterial([r * 0.6, g * 0.6, b * 0.6], 1.6));
       core.renderOrder = 7;
       group.add(core);
       let extra: Mesh | null = null;
@@ -635,7 +635,7 @@ export class Effects {
       this.projectiles.set(id, p);
       // Muzzle burst.
       this.ring(v.set(x, y, 0.2), [r, g, b], 2.5, 0.3);
-      this.add.emit({ x, y, z: 0.2, life: 0.2, size: 2.4, sizeEnd: 0.5, r: r * 0.6, g: g * 0.6, b: b * 0.6 });
+      this.add.emit({ x, y, z: 0.2, life: 0.18, size: 1.2, sizeEnd: 0.3, r: r * 0.3, g: g * 0.3, b: b * 0.3 });
     }
     p.group.position.set(x, y, 0.15);
     p.dir = dir;
@@ -643,7 +643,7 @@ export class Effects {
       const l = this.lights[p.light];
       l.light.position.set(x, y, 0.8);
       l.light.color.set(d.accent);
-      l.light.intensity = 70 + Math.sin(this.time * 30) * 15;
+      l.light.intensity = 16 + Math.sin(this.time * 30) * 4;
     }
   }
 
@@ -656,14 +656,14 @@ export class Effects {
     this.projectiles.delete(id);
     const d = CHARACTERS[p.char];
     const [r, g, b] = hdr(d.accent, 4);
-    this.add.emit({ x, y, z: 0.2, life: 0.18, size: 3, sizeEnd: 0.6, r: 5, g: 5, b: 5 });
+    this.add.emit({ x, y, z: 0.2, life: 0.15, size: 1.4, sizeEnd: 0.4, r: 3, g: 3, b: 3 });
     for (let i = 0; i < this.n(45); i++) {
       const a = Math.random() * Math.PI * 2;
       const s = rnd(3, 12);
       this.add.emit({ x, y, z: 0.2, vx: Math.cos(a) * s, vy: Math.sin(a) * s, vz: rnd(-4, 4), life: rnd(0.2, 0.55), size: 0.045, r, g, b, stretch: 0.05, drag: 3, gravity: -6 });
     }
     this.ring(v.set(x, y, 0.2), [r, g, b], 3.2, 0.35);
-    this.flashLight(v.set(x, y, 0.6), d.accent, 160, 0.25);
+    this.flashLight(v.set(x, y, 0.6), d.accent, 30, 0.22);
     if (p.char === 'phloeng') this.flames(v.set(x, y, 0.2), 1.6, this.n(30));
     if (p.char === 'vayu') this.zap(v.set(x, y, 0.2), 1.6, 6, 0.2);
   }
@@ -721,7 +721,7 @@ export class Effects {
       const vel = new Vector3().subVectors(center, p).multiplyScalar(rnd(2.5, 4));
       this.add.emit({ x: p.x, y: p.y, z: p.z, vx: vel.x, vy: vel.y, vz: vel.z, life: 0.32, size: rnd(0.03, 0.06), r, g, b, stretch: 0.06 });
     }
-    this.add.emit({ x: center.x, y: center.y, z: center.z, life: 0.08, size: 0.6 + t * 1.6, r: r * 0.6, g: g * 0.6, b: b * 0.6 });
+    this.add.emit({ x: center.x, y: center.y, z: center.z, life: 0.08, size: 0.4 + t * 0.9, r: r * 0.35, g: g * 0.35, b: b * 0.35 });
     if (char === 'vayu' && Math.random() < 0.5) this.zap(center, 1.2, 2, 0.06);
   }
 
@@ -776,7 +776,7 @@ export class Effects {
         const l = this.lights[this.beamLightIdx].light;
         l.position.set(x, y, 1);
         l.color.set(color);
-        l.intensity = 260 + Math.sin(this.time * 50) * 60;
+        l.intensity = 55 + Math.sin(this.time * 50) * 12;
         l.distance = 22;
       }
     } else if (this.beamLightIdx >= 0) {

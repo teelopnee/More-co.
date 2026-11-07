@@ -75,7 +75,7 @@ export class CpuController {
 
     if (this.plan.length) return this.runPlan(out);
     if (this.cooldown > 0) { this.cooldown--; return out(0, 0); }
-    this.decide(fight, me, op);
+    this.decide(me, op);
     return this.plan.length ? this.runPlan(out) : out(0, 0);
   }
 
@@ -99,7 +99,7 @@ export class CpuController {
     return null;
   }
 
-  private decide(fight: Fight, me: Fighter, op: Fighter) {
+  private decide(me: Fighter, op: Fighter) {
     const t = this.t;
     const r = this.rnd;
     const dist = Math.abs(op.x - me.x);

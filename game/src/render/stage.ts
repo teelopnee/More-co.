@@ -4,7 +4,7 @@ import {
   DirectionalLight, DoubleSide, FogExp2, Group, HemisphereLight, IcosahedronGeometry, InstancedBufferAttribute,
   InstancedBufferGeometry, LatheGeometry, Mesh, MeshBasicMaterial, MeshStandardMaterial, OctahedronGeometry,
   PlaneGeometry, PMREMGenerator, PointLight, RepeatWrapping, Scene, ShaderMaterial, SphereGeometry, SRGBColorSpace,
-  TorusGeometry, Vector2, Vector3, type Texture, type WebGLRenderer,
+  TorusGeometry, UniformsLib, UniformsUtils, Vector2, Vector3, type Texture, type WebGLRenderer,
 } from 'three';
 import { LAYER_NO_REFLECT, type Engine } from './engine';
 import { NOISE } from './glsl';
@@ -43,8 +43,8 @@ const SKY_FRAG = /* glsl */ `
     col = mix(col, vec3(0.02, 0.035, 0.07), smoothstep(0.0, -0.35, h));
     float md = dot(dir, uMoonDir);
     // Teal-gold atmosphere around the moon.
-    col += vec3(0.25, 0.35, 0.55) * pow(max(md, 0.0), 12.0) * 0.6;
-    col += vec3(0.9, 0.55, 0.35) * pow(max(md, 0.0), 90.0) * 0.8;
+    col += vec3(0.12, 0.2, 0.36) * pow(max(md, 0.0), 14.0) * 0.45;
+    col += vec3(0.7, 0.45, 0.3) * pow(max(md, 0.0), 120.0) * 0.35;
 
     // Stars.
     vec3 sd = dir * 260.0;
@@ -64,7 +64,7 @@ const SKY_FRAG = /* glsl */ `
       vec3 moon = vec3(5.5, 5.0, 4.3) * (0.62 + cr * 0.55);
       col = mix(col, moon, disc);
     }
-    col += vec3(0.7, 0.75, 1.0) * pow(max(md, 0.0), 900.0) * 2.5;
+    col += vec3(0.7, 0.75, 1.0) * pow(max(md, 0.0), 1400.0) * 1.6;
 
     // Storm clouds: two layers projected on a dome.
     if (uSimple < 0.5 && h > -0.12) {
@@ -76,7 +76,7 @@ const SKY_FRAG = /* glsl */ `
       dens *= smoothstep(-0.1, 0.12, h);
       float lit = pow(max(md, 0.0), 6.0);
       vec3 cloudCol = mix(vec3(0.02, 0.016, 0.05), vec3(0.16, 0.13, 0.3), n2);
-      cloudCol += vec3(0.55, 0.6, 0.9) * lit * (1.0 - n2) * 1.4;
+      cloudCol += vec3(0.4, 0.45, 0.75) * lit * (1.0 - n2) * 0.7;
       cloudCol += vec3(0.6, 0.72, 1.0) * uFlash * (0.6 + n1 * 2.5);
       col = mix(col, cloudCol, dens * 0.92);
     }
@@ -319,7 +319,7 @@ export class Stage {
             gTile = hash12(tid);
             float stain = fbm(vWPos.xz * 0.35);
             gWet = smoothstep(0.35, 0.7, stain + gTile * 0.25);
-            diffuseColor.rgb *= mix(0.75, 1.25, gTile) * mix(1.0, 0.45, gGrout) * mix(1.1, 0.7, gWet);
+            diffuseColor.rgb *= mix(0.75, 1.25, gTile) * mix(1.0, 0.3, gGrout) * mix(1.1, 0.7, gWet);
             diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.85, 0.8, 1.1), stain);
             gRipple = uRipples > 0.5 ? ripples(vWPos.xz * 2.2, uTime) : vec2(0.0);
             float r = length(vWPos.xz - vec2(0.0, 0.0));
@@ -334,30 +334,30 @@ export class Stage {
             vec2 g = floor(vec2(cellA * 3.0, cellR * 3.0));
             float bit = step(0.45, hash12(g + seg * 7.0));
             vec2 gf = fract(vec2(cellA * 3.0, cellR * 3.0));
-            float stroke = bit * (1.0 - smoothstep(0.18, 0.32, abs(gf.x - 0.5))) * step(0.12, cellA) * step(cellA, 0.88);
+            float stroke = bit * (1.0 - smoothstep(0.08, 0.16, abs(gf.x - 0.5))) * (1.0 - smoothstep(0.3, 0.45, abs(gf.y - 0.5))) * step(0.12, cellA) * step(cellA, 0.88);
             float petal = smoothstep(0.03, 0.0, abs(r - (1.2 + 0.9 * abs(cos(a * 4.0)))) ) * step(r, 2.2);
-            gRune = (ring1 + ring2 + ring3 * 0.7 + band * stroke * 0.9 + petal * 0.6);
+            gRune = (ring1 + ring2 + ring3 * 0.7 + band * stroke * 0.45 + petal * 0.6);
           }
         `)
         .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
           roughnessFactor = mix(roughnessFactor, 0.08, gWet);
-          roughnessFactor = mix(roughnessFactor, 0.9, gGrout);
+          roughnessFactor = mix(roughnessFactor, 0.55, gGrout);
         `)
         .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
           {
             float pulse = 0.65 + 0.35 * sin(uTime * 1.7);
             vec3 runeCol = mix(vec3(1.0, 0.55, 0.16), vec3(0.4, 0.8, 1.0), uRune);
-            totalEmissiveRadiance += runeCol * gRune * (0.55 * pulse + uRune * 4.0);
+            totalEmissiveRadiance += runeCol * gRune * (0.32 * pulse + uRune * 3.0);
           }
         `)
         .replace('#include <opaque_fragment>', `
           {
-            vec3 wp = vWPos + vec3(gRipple.x, 0.0, gRipple.y) * 0.05 + vec3(vnoise(vWPos.xz * 6.0) - 0.5, 0.0, vnoise(vWPos.zx * 6.0) - 0.5) * 0.03 * (1.0 - gWet);
+            vec3 wp = vWPos + vec3(gRipple.x, 0.0, gRipple.y) * 0.06 + vec3(vnoise(vWPos.xz * 7.0) - 0.5, 0.0, vnoise(vWPos.zx * 7.0) - 0.5) * mix(0.09, 0.02, gWet);
             vec4 rc = uReflMatrix * vec4(wp, 1.0);
             vec3 refl = texture2DProj(tReflect, rc).rgb;
             float ndv = clamp(dot(normalize(vViewPosition), normal), 0.0, 1.0);
             float fres = 0.08 + 0.92 * pow(1.0 - ndv, 4.0);
-            float k = mix(0.18, 0.85, gWet) * (1.0 - gGrout * 0.85) * mix(0.55, 1.0, fres);
+            float k = mix(0.14, 0.7, gWet) * (1.0 - gGrout * 0.85) * mix(0.5, 1.0, fres);
             outgoingLight += refl * k * uReflStrength;
             outgoingLight += vec3(0.5, 0.6, 0.9) * length(gRipple) * 0.04;
           }
@@ -373,7 +373,7 @@ export class Stage {
 
     this.buildColonnade(stone, gold, trim);
     this.buildBraziers(stone, gold);
-    this.buildBackground(stone, gold);
+    this.buildBackground(stone);
 
     // ── Rain ──
     const quad = new BufferGeometry();
@@ -385,7 +385,7 @@ export class Stage {
     const seeds = new Float32Array(MAX_RAIN * 4);
     for (let i = 0; i < MAX_RAIN; i++) {
       seeds[i * 4] = rr(-16, 16);
-      seeds[i * 4 + 1] = rr(-12, 9);
+      seeds[i * 4 + 1] = rr(-13, 2.5);
       seeds[i * 4 + 2] = rand();
       seeds[i * 4 + 3] = rand();
     }
@@ -414,7 +414,7 @@ export class Stage {
           mv.xy += side * position.x * (0.011 + aSeed.z * 0.008) - axis * position.y * len;
           gl_Position = projectionMatrix * mv;
           vUv = vec2(position.x + 0.5, position.y);
-          vFade = smoothstep(-0.4, 0.6, y) * smoothstep(1.0, 3.5, -mv.z);
+          vFade = smoothstep(-0.4, 0.6, y) * smoothstep(3.0, 6.0, -mv.z);
         }
       `,
       fragmentShader: /* glsl */ `
@@ -581,7 +581,7 @@ export class Stage {
           uTime: { value: 0 }, uPhase: { value: x }, uFlash: { value: 0 },
           uColor: { value: hue ? new Color(0.22, 0.03, 0.06) : new Color(0.05, 0.04, 0.18) },
           uGlow: { value: hue ? new Color(2.2, 0.9, 0.25) : new Color(0.4, 1.2, 2.4) },
-          fogColor: { value: new Color() }, fogDensity: { value: 0 },
+          ...UniformsUtils.clone(UniformsLib.fog),
         },
         vertexShader: /* glsl */ `
           uniform float uTime;
@@ -671,7 +671,7 @@ export class Stage {
     }
   }
 
-  private buildBackground(stone: MeshStandardMaterial, gold: MeshStandardMaterial) {
+  private buildBackground(stone: MeshStandardMaterial) {
     const farStone = new MeshStandardMaterial({ color: 0x2c2638, roughness: 0.85, metalness: 0.05 });
     const glowWarm = new MeshBasicMaterial({ color: new Color(3.2, 1.5, 0.45), fog: true });
     const glowCool = new MeshBasicMaterial({ color: new Color(0.35, 1.6, 3.2), fog: true });
@@ -832,9 +832,9 @@ export class Stage {
     // Sky lanterns (khom loi): GPU animated, two instanced meshes sharing seeds.
     const seeds = new Float32Array(MAX_LANTERNS * 4);
     for (let i = 0; i < MAX_LANTERNS; i++) {
-      const near = i % 4 === 0;
+      const near = i % 9 === 0;
       seeds[i * 4] = near ? rr(-22, 22) : rr(-80, 80);
-      seeds[i * 4 + 1] = near ? rr(-20, -11) : rr(-110, -22);
+      seeds[i * 4 + 1] = near ? rr(-26, -14) : rr(-110, -26);
       seeds[i * 4 + 2] = rand();
       seeds[i * 4 + 3] = rand();
     }
@@ -849,11 +849,11 @@ export class Stage {
         float H = 70.0;
         float y = mod(aSeed.z * H + uTime * (0.35 + aSeed.w * 0.5), H) - 12.0;
         vec3 c = vec3(aSeed.x + sin(uTime * 0.2 + aSeed.z * 30.0) * 2.0, y, aSeed.y);
-        float s = 0.55 + aSeed.w * 0.6;
+        float s = 0.4 + aSeed.w * 0.45;
         vFlick = 0.75 + 0.25 * sin(uTime * 9.0 + aSeed.z * 80.0) * sin(uTime * 5.3 + aSeed.w * 40.0);
         vUv = uv;
         ${glow
-          ? 'vec4 mv = viewMatrix * vec4(c, 1.0); mv.xy += position.xy * s * 3.2;'
+          ? 'vec4 mv = viewMatrix * vec4(c, 1.0); mv.xy += position.xy * s * 1.7;'
           : 'vec4 mv = viewMatrix * vec4(c + position * s, 1.0);'}
         vFog = exp(-0.000035 * mv.z * mv.z);
         gl_Position = projectionMatrix * mv;

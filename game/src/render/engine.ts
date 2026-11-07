@@ -1,6 +1,6 @@
 // Renderer, post-processing chain and planar reflections.
 import {
-  ACESFilmicToneMapping, Color, HalfFloatType, Layers, Matrix4, Mesh, PCFSoftShadowMap, PerspectiveCamera, Plane,
+  ACESFilmicToneMapping, Color, HalfFloatType, Matrix4, Mesh, PCFShadowMap, PerspectiveCamera, Plane,
   Scene, SRGBColorSpace, Vector2, Vector3, Vector4, WebGLRenderTarget, WebGLRenderer, type Object3D,
 } from 'three';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
@@ -77,7 +77,9 @@ const FX_SHADER = {
           p -= delta;
           vec3 s = texture2D(tDiffuse, p).rgb;
           float l = max(max(s.r, s.g), s.b);
-          rays += s * smoothstep(1.2, 4.0, l) * decay;
+          vec2 dl = (p - uLight) * vec2(uAspect, 1.0);
+          float nearLight = 1.0 - smoothstep(0.02, 0.22, length(dl));
+          rays += min(s, vec3(8.0)) * smoothstep(2.5, 5.0, l) * nearLight * decay;
           decay *= 0.965;
         }
         vec2 q = (vUv - uLight) * vec2(uAspect, 1.0);
@@ -203,13 +205,10 @@ export class Mirror {
 
     for (const o of hide) o.visible = false;
     const prevTarget = renderer.getRenderTarget();
-    const prevShadow = renderer.shadowMap.autoUpdate;
-    renderer.shadowMap.autoUpdate = false;
     renderer.setRenderTarget(this.target);
     renderer.state.buffers.depth.setMask(true);
     if (renderer.autoClear === false) renderer.clear();
     renderer.render(scene, vc);
-    renderer.shadowMap.autoUpdate = prevShadow;
     renderer.setRenderTarget(prevTarget);
     for (const o of hide) o.visible = true;
   }
@@ -250,7 +249,6 @@ export class Engine {
   width = 1;
   height = 1;
   private time = 0;
-  private readonly layers = new Layers();
 
   constructor(readonly canvas: HTMLCanvasElement) {
     this.renderer = new WebGLRenderer({
@@ -259,9 +257,8 @@ export class Engine {
     this.renderer.outputColorSpace = SRGBColorSpace;
     this.renderer.toneMapping = ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.05;
-    this.renderer.shadowMap.type = PCFSoftShadowMap;
+    this.renderer.shadowMap.type = PCFShadowMap;
     this.camera.layers.enable(LAYER_NO_REFLECT);
-    this.layers.enable(LAYER_NO_REFLECT);
     this.buildComposer();
   }
 
@@ -276,7 +273,7 @@ export class Engine {
     this.composer?.dispose();
     this.composer = new EffectComposer(this.renderer, rt);
     this.renderPass ??= new RenderPass(this.scene, this.camera);
-    this.bloom ??= new UnrealBloomPass(new Vector2(256, 256), 0.85, 0.55, 0.92);
+    this.bloom ??= new UnrealBloomPass(new Vector2(256, 256), 0.75, 0.42, 1.05);
     if (!this.fxPass) this.fxPass = new ShaderPass(FX_SHADER);
     this.fxaa ??= new FXAAPass();
     if (!this.grade) this.grade = new ShaderPass(GRADE_SHADER);
@@ -349,6 +346,9 @@ export class Engine {
     gu.uSpeed.value = p.speed;
     gu.uBars.value = p.bars;
     this.camera.updateMatrixWorld();
+    // Shadows are drawn once per frame and shared by the mirror and main passes.
+    this.renderer.shadowMap.autoUpdate = false;
+    this.renderer.shadowMap.needsUpdate = true;
     this.mirror.render(this.renderer, this.scene, this.camera, this.mirrorHide);
     this.composer.render(dt);
   }

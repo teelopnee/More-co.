@@ -266,7 +266,7 @@ export class FighterView {
     }
 
     // Ribbons (scarves).
-    this.wind.set(-2.5 - f.vx * f.facing * 2, 0.5 + Math.max(0, -f.vy) * 0.6, 1.4);
+    this.wind.set(-f.facing * (4.5 + Math.abs(f.vx) * 1.2), 1.6 + Math.max(0, -f.vy) * 0.8, 1.2);
     for (const r of rig.ribbons) r.update(dt, eye, this.wind);
 
     // Halo spin for Chantra.

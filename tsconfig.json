@@ -16,5 +16,5 @@
     "types": ["vite/client", "vite-plugin-pwa/client", "node"],
     "noEmit": true
   },
-  "include": ["src", "tests", "vite.config.ts"]
+  "include": ["src", "tests", "game/src", "vite.config.ts", "vite.game.config.ts"]
 }

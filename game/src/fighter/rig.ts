@@ -3,7 +3,7 @@
 import {
   AdditiveBlending, BufferAttribute, BufferGeometry, CapsuleGeometry, Color, ConeGeometry, CylinderGeometry,
   DoubleSide, Group, Mesh, MeshBasicMaterial, MeshPhysicalMaterial, Object3D, OctahedronGeometry, Quaternion,
-  ShaderMaterial, SphereGeometry, TorusGeometry, Vector3, type BufferGeometry as BG, type Material,
+  ShaderMaterial, SphereGeometry, TorusGeometry, UniformsLib, UniformsUtils, Vector3, type BufferGeometry as BG, type Material,
 } from 'three';
 import type { CharacterDef } from '../data/characters';
 
@@ -69,7 +69,7 @@ export class Ribbon {
   constructor(
     private readonly anchor: Object3D,
     private readonly offset: Vector3,
-    private readonly segments: number,
+    segments: number,
     private readonly segLen: number,
     private readonly width: number,
     base: Color,
@@ -86,7 +86,7 @@ export class Ribbon {
     for (let i = 0; i < segments; i++) { const k = i * 2; idx.push(k, k + 1, k + 2, k + 1, k + 3, k + 2); }
     this.geo.setIndex(idx);
     const mat = new ShaderMaterial({
-      uniforms: { uBase: { value: base }, uTip: { value: tip }, uBoost: { value: 1 } },
+      uniforms: { ...UniformsUtils.clone(UniformsLib.fog), uBase: { value: base }, uTip: { value: tip }, uBoost: { value: 1 } },
       vertexShader: /* glsl */ `
         varying vec2 vUv;
         #include <fog_pars_vertex>
@@ -151,9 +151,9 @@ export class Ribbon {
         q.copy(p);
         const flutter = Math.sin(performance.now() * 0.006 + i * 0.9) * 0.6;
         p.x += vx + (wind.x + flutter * wind.length() * 0.3) * h * h;
-        p.y += vy + (-9.8 + wind.y) * h * h * 0.6;
+        p.y += vy + (-9.8 * 0.3 + wind.y) * h * h;
         p.z += vz + (wind.z + flutter * 1.5) * h * h;
-        if (p.y < 0.02) p.y = 0.02;
+        if (p.y < 0.05) { p.y = 0.05; q.y = p.y; }
       }
       for (let it = 0; it < 3; it++) {
         for (let i = 0; i < this.pts.length - 1; i++) {
@@ -239,17 +239,17 @@ export class Rig {
 
     if (!ghost) {
       const base = new Color(def.suit).lerp(new Color(def.accent), 0.25);
-      const tip = new Color(def.accent2).multiplyScalar(3);
+      const tip = new Color(def.accent).lerp(new Color(def.accent2), 0.4).multiplyScalar(2.2);
       if (def.id === 'chantra') {
-        this.ribbons.push(new Ribbon(this.joints.chest, new Vector3(0.09, 0.25, -0.12), 14, 0.075, 0.045, base, tip));
-        this.ribbons.push(new Ribbon(this.joints.chest, new Vector3(-0.09, 0.25, -0.12), 14, 0.075, 0.045, base, tip));
-        this.ribbons.push(new Ribbon(this.joints.head, new Vector3(0, 0.2, -0.09), 10, 0.07, 0.035, base, new Color(def.accent).multiplyScalar(3)));
+        this.ribbons.push(new Ribbon(this.joints.chest, new Vector3(0.09, 0.25, -0.12), 11, 0.065, 0.04, base, tip));
+        this.ribbons.push(new Ribbon(this.joints.chest, new Vector3(-0.09, 0.25, -0.12), 11, 0.065, 0.04, base, tip));
+        this.ribbons.push(new Ribbon(this.joints.head, new Vector3(0, 0.2, -0.09), 9, 0.06, 0.032, base, new Color(def.accent).multiplyScalar(2.2)));
       } else if (def.id === 'phloeng') {
-        this.ribbons.push(new Ribbon(this.joints.chest, new Vector3(0, 0.22, -0.13), 9, 0.085, 0.075, base, tip));
-        this.ribbons.push(new Ribbon(this.joints.hips, new Vector3(0.06, 0.02, -0.12), 7, 0.08, 0.05, base, tip));
+        this.ribbons.push(new Ribbon(this.joints.chest, new Vector3(0, 0.22, -0.13), 8, 0.07, 0.07, base, tip));
+        this.ribbons.push(new Ribbon(this.joints.hips, new Vector3(0.06, 0.02, -0.12), 5, 0.07, 0.045, base, tip));
       } else {
-        this.ribbons.push(new Ribbon(this.joints.chest, new Vector3(0.04, 0.24, -0.12), 16, 0.085, 0.06, base, tip));
-        this.ribbons.push(new Ribbon(this.joints.chest, new Vector3(-0.05, 0.24, -0.12), 12, 0.08, 0.045, base, tip));
+        this.ribbons.push(new Ribbon(this.joints.chest, new Vector3(0.04, 0.24, -0.12), 12, 0.07, 0.055, base, tip));
+        this.ribbons.push(new Ribbon(this.joints.chest, new Vector3(-0.05, 0.24, -0.12), 9, 0.065, 0.04, base, tip));
       }
     }
   }
