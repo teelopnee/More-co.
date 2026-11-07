@@ -122,8 +122,10 @@ export class Input {
   /** Consume one simulation step of input for a player. */
   frame(player: number): InputFrame {
     const s = this.slots[player];
-    const x = (s.isHeld('right') ? 1 : 0) - (s.isHeld('left') ? 1 : 0);
-    const y = (s.isHeld('up') ? 1 : 0) - (s.isHeld('down') ? 1 : 0);
+    // A direction tapped and released between two steps still counts for this step.
+    const on = (a: Action) => s.isHeld(a) || s.pressed.has(a);
+    const x = (on('right') ? 1 : 0) - (on('left') ? 1 : 0);
+    const y = (on('up') ? 1 : 0) - (on('down') ? 1 : 0);
     const f: InputFrame = { x, y, p: s.pressed.has('p'), k: s.pressed.has('k'), s: s.pressed.has('s'), u: s.pressed.has('u') };
     s.pressed.clear();
     return f;

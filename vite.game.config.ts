@@ -12,7 +12,6 @@ export default defineConfig({
     chunkSizeWarningLimit: 2000,
     assetsInlineLimit: 100_000,
     cssCodeSplit: false,
-    rolldownOptions: { output: { inlineDynamicImports: true } },
   },
   server: { port: 5174, host: true },
 });

@@ -222,7 +222,7 @@ export class Stage {
     // ── Lights ──
     this.hemi = new HemisphereLight(0x5a66ff, 0x1a0b18, 0.75);
     this.group.add(this.hemi);
-    this.key = new DirectionalLight(0xbfd0ff, 2.6);
+    this.key = new DirectionalLight(0xbfd0ff, 2.1);
     this.key.position.set(5, 14, -11);
     this.key.castShadow = true;
     const sc = this.key.shadow.camera;

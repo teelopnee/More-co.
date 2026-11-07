@@ -322,11 +322,11 @@ class BeamVis {
       g.rotateZ(Math.PI / 2);
       return g;
     };
-    const mc = mk(5, 14), mo = mk(0.6, 9), mh = mk(0, 5);
+    const mc = mk(2.2, 14), mo = mk(0.25, 9), mh = mk(0, 5);
     this.mats.push(mc, mo, mh);
-    this.core = new Mesh(geo(0.2), mc);
-    this.outer = new Mesh(geo(0.55), mo);
-    this.haze = new Mesh(geo(1.15), mh);
+    this.core = new Mesh(geo(0.16), mc);
+    this.outer = new Mesh(geo(0.45), mo);
+    this.haze = new Mesh(geo(0.95), mh);
     for (const m of [this.core, this.outer, this.haze]) { m.frustumCulled = false; m.renderOrder = 7; this.group.add(m); }
     const ringMat = coreMaterial([1, 1, 1], 1.5);
     for (let i = 0; i < 6; i++) {
@@ -347,11 +347,11 @@ class BeamVis {
     this.age = 0;
     this.fade = 0;
     const d = CHARACTERS[char];
-    const [r, g, b] = hdr(d.accent, 4);
-    const [r2, g2, b2] = hdr(d.accent2, 2.5);
-    (this.mats[0].uniforms.uColor.value as Color).setRGB(r2 * 1.4, g2 * 1.4, b2 * 1.4);
+    const [r, g, b] = hdr(d.accent, 1.8);
+    const [r2, g2, b2] = hdr(d.accent2, 1.6);
+    (this.mats[0].uniforms.uColor.value as Color).setRGB(r2, g2, b2);
     (this.mats[1].uniforms.uColor.value as Color).setRGB(r, g, b);
-    (this.mats[2].uniforms.uColor.value as Color).setRGB(r * 0.25, g * 0.25, b * 0.25);
+    (this.mats[2].uniforms.uColor.value as Color).setRGB(r * 0.06, g * 0.06, b * 0.06);
     for (const ring of this.rings) ((ring.material as ShaderMaterial).uniforms.uColor.value as Color).setRGB(r, g, b);
     this.group.visible = true;
   }

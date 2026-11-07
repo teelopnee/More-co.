@@ -61,8 +61,8 @@ export class Director {
 
   beamStart(who: number) {
     this.cine = { kind: 'beam', who, t: 0, dur: 1.05 };
-    this.flashScreen(0.9);
-    this.speed = 1;
+    this.flashScreen(0.35);
+    this.speed = 0.8;
     this.shake(0.6);
   }
 
@@ -124,7 +124,7 @@ export class Director {
       } else if (cine && cine.kind === 'beam') {
         const f = fight.f[cine.who];
         const t = cine.t / cine.dur;
-        this.tPos.set(f.x - f.facing * (2.4 + t), 0.75 + t * 0.4, 4.4 + t * 1.5);
+        this.tPos.set(f.x - f.facing * (2.6 + t), 0.9 + t * 0.5, 5.4 + t * 2);
         this.tLook.set(f.x + f.facing * 4.5, 1.25, 0);
         fov = 44;
         k = 7;
