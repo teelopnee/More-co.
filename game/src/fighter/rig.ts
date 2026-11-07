@@ -1,7 +1,7 @@
 // Procedural armoured fighter: a joint hierarchy dressed with primitives, PBR armour with an
 // energy rim light, glowing seams, and a verlet-simulated scarf.
 import {
-  AdditiveBlending, BufferAttribute, BufferGeometry, CapsuleGeometry, Color, ConeGeometry, CylinderGeometry,
+  BufferAttribute, BufferGeometry, CapsuleGeometry, Color, ConeGeometry, CylinderGeometry,
   DoubleSide, Group, Mesh, MeshBasicMaterial, MeshPhysicalMaterial, Object3D, OctahedronGeometry, Quaternion,
   ShaderMaterial, SphereGeometry, TorusGeometry, UniformsLib, UniformsUtils, Vector3, type BufferGeometry as BG, type Material,
 } from 'three';
@@ -15,6 +15,16 @@ export const JOINTS = [
 export type Joint = (typeof JOINTS)[number];
 
 export const HIP_HEIGHT = 1.0;
+
+/** Rig geometry is shared between every fighter, ghost and match, so it is built once. */
+const geoCache = new Map<string, BG>();
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function geo<T extends BG>(tag: string, Ctor: new (...a: any[]) => T, ...args: number[]): T {
+  const key = tag + ':' + args.join(',');
+  let g = geoCache.get(key);
+  if (!g) { g = new Ctor(...args); geoCache.set(key, g); }
+  return g as T;
+}
 
 const PARENT: Record<Joint, Joint | null> = {
   hips: null, spine: 'hips', chest: 'spine', neck: 'chest', head: 'neck',
@@ -63,6 +73,9 @@ export class Ribbon {
   private readonly geo: BufferGeometry;
   private readonly tmp = new Vector3();
   private readonly anchorW = new Vector3();
+  private readonly tv = new Vector3();
+  private readonly vv = new Vector3();
+  private readonly sv = new Vector3();
   private acc = 0;
   private ready = false;
 
@@ -125,6 +138,11 @@ export class Ribbon {
     return this.mesh.material as ShaderMaterial;
   }
 
+  dispose() {
+    this.geo.dispose();
+    this.material.dispose();
+  }
+
   reset() {
     this.ready = false;
   }
@@ -141,6 +159,7 @@ export class Ribbon {
     }
     this.acc = Math.min(this.acc + dt, 0.05);
     const h = 1 / 120;
+    const now = performance.now();
     while (this.acc >= h) {
       this.acc -= h;
       this.pts[0].copy(this.anchorW);
@@ -149,7 +168,7 @@ export class Ribbon {
         const p = this.pts[i], q = this.prev[i];
         const vx = (p.x - q.x) * 0.985, vy = (p.y - q.y) * 0.985, vz = (p.z - q.z) * 0.985;
         q.copy(p);
-        const flutter = Math.sin(performance.now() * 0.006 + i * 0.9) * 0.6;
+        const flutter = Math.sin(now * 0.006 + i * 0.9) * 0.6;
         p.x += vx + (wind.x + flutter * wind.length() * 0.3) * h * h;
         p.y += vy + (-9.8 * 0.3 + wind.y) * h * h;
         p.z += vz + (wind.z + flutter * 1.5) * h * h;
@@ -168,7 +187,7 @@ export class Ribbon {
     }
     // Build a camera-facing strip.
     const pos = this.geo.attributes.position as BufferAttribute;
-    const t = new Vector3(), v = new Vector3(), s = new Vector3();
+    const t = this.tv, v = this.vv, s = this.sv;
     for (let i = 0; i < this.pts.length; i++) {
       const p = this.pts[i];
       const a = this.pts[Math.max(0, i - 1)], b = this.pts[Math.min(this.pts.length - 1, i + 1)];
@@ -197,7 +216,7 @@ export class Rig {
   readonly accent: Color;
   readonly accent2: Color;
 
-  constructor(readonly def: CharacterDef, ghost = false) {
+  constructor(readonly def: CharacterDef) {
     this.accent = new Color(def.accent);
     this.accent2 = new Color(def.accent2);
     const rimStrength = { value: 1 };
@@ -233,11 +252,11 @@ export class Rig {
     }
     this.root.add(this.pivot);
     this.pivot.add(this.joints.hips);
-    this.dress(ghost);
+    this.dress();
     const h = def.build[2];
     this.root.scale.setScalar(h);
 
-    if (!ghost) {
+    {
       const base = new Color(def.suit).lerp(new Color(def.accent), 0.25);
       const tip = new Color(def.accent).lerp(new Color(def.accent2), 0.4).multiplyScalar(2.2);
       if (def.id === 'chantra') {
@@ -266,18 +285,18 @@ export class Rig {
     return m;
   }
 
-  private dress(ghost: boolean) {
+  private dress() {
     const { armor, suit, glow, trim } = this.mats;
     const id = this.def.id;
     const [bw, bulk] = this.def.build;
-    const sph = new SphereGeometry(1, 24, 16);
-    const sphLo = new SphereGeometry(1, 16, 10);
-    const cap = (r: number, l: number) => new CapsuleGeometry(r, l, 6, 14);
+    const sph = geo('Sphere', SphereGeometry, 1, 24, 16);
+    const sphLo = geo('Sphere', SphereGeometry, 1, 16, 10);
+    const cap = (r: number, l: number) => geo('Capsule', CapsuleGeometry, r, l, 6, 14);
 
     // Pelvis & belt.
     this.add('hips', sph, suit, [0, -0.02, 0], [0.16 * bulk, 0.12, 0.115 * bulk]);
-    this.add('hips', new TorusGeometry(0.15, 0.028, 8, 28), trim, [0, 0.05, 0], [bulk, 0.78 * bulk, 1], [Math.PI / 2, 0, 0]);
-    this.add('hips', new OctahedronGeometry(0.04), glow, [0, 0.05, 0.12 * bulk]);
+    this.add('hips', geo('Torus', TorusGeometry, 0.15, 0.028, 8, 28), trim, [0, 0.05, 0], [bulk, 0.78 * bulk, 1], [Math.PI / 2, 0, 0]);
+    this.add('hips', geo('Octahedron', OctahedronGeometry, 0.04), glow, [0, 0.05, 0.12 * bulk]);
     // Tassets.
     for (const s of [-1, 1]) {
       this.add('hips', sphLo, armor, [s * 0.12 * bulk, -0.06, 0.02], [0.07, 0.11, 0.1], [0, 0, s * 0.25]);
@@ -292,44 +311,44 @@ export class Rig {
     this.add('chest', sph, suit, [0, 0.12, 0], [0.2 * bw * bulk, 0.19, 0.13 * bulk]);
     this.add('chest', sph, armor, [0, 0.15, 0.035], [0.19 * bw * bulk, 0.15, 0.12 * bulk]);
     this.add('chest', sph, armor, [0, 0.13, -0.04], [0.18 * bw * bulk, 0.16, 0.1 * bulk]);
-    const core = this.add('chest', new OctahedronGeometry(0.045, 0), glow, [0, 0.13, 0.155 * bulk], [1, 1.3, 0.6]);
+    const core = this.add('chest', geo('Octahedron', OctahedronGeometry, 0.045, 0), glow, [0, 0.13, 0.155 * bulk], [1, 1.3, 0.6]);
     core.castShadow = false;
     // Glowing chest seams.
     for (const s of [-1, 1]) {
-      this.add('chest', new CylinderGeometry(0.007, 0.007, 0.2, 5), glow, [s * 0.075 * bw, 0.15, 0.148 * bulk], undefined, [0, 0, s * 0.9]);
+      this.add('chest', geo('Cylinder', CylinderGeometry, 0.007, 0.007, 0.2, 5), glow, [s * 0.075 * bw, 0.15, 0.148 * bulk], undefined, [0, 0, s * 0.9]);
     }
     // Collar.
-    this.add('chest', new TorusGeometry(0.085, 0.022, 8, 20), trim, [0, 0.255, -0.01], [1, 1, 1], [Math.PI / 2 + 0.2, 0, 0]);
+    this.add('chest', geo('Torus', TorusGeometry, 0.085, 0.022, 8, 20), trim, [0, 0.255, -0.01], [1, 1, 1], [Math.PI / 2 + 0.2, 0, 0]);
 
     // Neck & head.
-    this.add('neck', new CylinderGeometry(0.05, 0.058, 0.11, 12), suit, [0, 0.03, 0]);
+    this.add('neck', geo('Cylinder', CylinderGeometry, 0.05, 0.058, 0.11, 12), suit, [0, 0.03, 0]);
     this.add('head', sph, armor, [0, 0.1, -0.005], [0.112, 0.125, 0.122]);
     this.add('head', sph, suit, [0, 0.05, 0.035], [0.088, 0.07, 0.09]);
-    const visor = this.add('head', new TorusGeometry(0.104, 0.014, 6, 24, Math.PI * 0.62), glow, [0, 0.108, 0.0], [1, 0.75, 1.12], [Math.PI / 2, 0, Math.PI * 0.19]);
+    const visor = this.add('head', geo('Torus', TorusGeometry, 0.104, 0.014, 6, 24, Math.PI * 0.62), glow, [0, 0.108, 0.0], [1, 0.75, 1.12], [Math.PI / 2, 0, Math.PI * 0.19]);
     visor.castShadow = false;
     // Character crests.
     if (id === 'vayu') {
       for (let i = 0; i < 4; i++) {
-        this.add('head', new ConeGeometry(0.03 - i * 0.004, 0.24 - i * 0.03, 4), armor, [0, 0.2 - i * 0.035, -0.06 - i * 0.03], [1, 1, 0.4], [-1.9 + i * 0.15, 0, 0]);
+        this.add('head', geo('Cone', ConeGeometry, 0.03 - i * 0.004, 0.24 - i * 0.03, 4), armor, [0, 0.2 - i * 0.035, -0.06 - i * 0.03], [1, 1, 0.4], [-1.9 + i * 0.15, 0, 0]);
       }
       for (const s of [-1, 1]) {
-        this.add('head', new ConeGeometry(0.018, 0.16, 4), glow, [s * 0.1, 0.14, -0.02], [1, 1, 0.5], [-1.6, 0, s * 0.35]);
+        this.add('head', geo('Cone', ConeGeometry, 0.018, 0.16, 4), glow, [s * 0.1, 0.14, -0.02], [1, 1, 0.5], [-1.6, 0, s * 0.35]);
       }
     } else if (id === 'phloeng') {
       for (const s of [-1, 1]) {
-        const horn = this.add('head', new ConeGeometry(0.028, 0.22, 8), trim, [s * 0.1, 0.19, 0.02], undefined, [-0.5, 0, -s * 0.7]);
+        const horn = this.add('head', geo('Cone', ConeGeometry, 0.028, 0.22, 8), trim, [s * 0.1, 0.19, 0.02], undefined, [-0.5, 0, -s * 0.7]);
         horn.scale.set(1, 1, 1);
       }
       for (let i = 0; i < 5; i++) {
-        this.add('head', new ConeGeometry(0.025, 0.14, 5), glow, [(i - 2) * 0.03, 0.21 - Math.abs(i - 2) * 0.02, -0.06], undefined, [-1.0 - Math.abs(i - 2) * 0.1, 0, (i - 2) * -0.2]);
+        this.add('head', geo('Cone', ConeGeometry, 0.025, 0.14, 5), glow, [(i - 2) * 0.03, 0.21 - Math.abs(i - 2) * 0.02, -0.06], undefined, [-1.0 - Math.abs(i - 2) * 0.1, 0, (i - 2) * -0.2]);
       }
     } else {
-      const halo = new Mesh(new TorusGeometry(0.2, 0.012, 8, 48, Math.PI * 1.45), glow);
+      const halo = new Mesh(geo('Torus', TorusGeometry, 0.2, 0.012, 8, 48, Math.PI * 1.45), glow);
       halo.position.set(0, 0.14, -0.13);
       halo.rotation.set(0, 0, -Math.PI * 0.225);
       this.joints.head.add(halo);
       (this as { halo: Object3D | null }).halo = halo;
-      this.add('head', new ConeGeometry(0.02, 0.12, 4), trim, [0, 0.24, 0.0], [1, 1, 0.5], [0.3, 0, 0]);
+      this.add('head', geo('Cone', ConeGeometry, 0.02, 0.12, 4), trim, [0, 0.24, 0.0], [1, 1, 0.5], [0.3, 0, 0]);
     }
 
     // Arms.
@@ -339,14 +358,14 @@ export class Rig {
       const pad = id === 'phloeng' ? 1.25 : id === 'chantra' ? 0.9 : 1;
       this.add(arm, sph, armor, [side * 0.02, -0.01, 0], [0.105 * pad * bulk, 0.085 * pad, 0.1 * pad * bulk], [0, 0, side * 0.35]);
       this.add(arm, sph, trim, [side * 0.03, -0.075, 0], [0.09 * pad * bulk, 0.02, 0.085 * pad * bulk], [0, 0, side * 0.35]);
-      if (id === 'phloeng') this.add(arm, new ConeGeometry(0.03, 0.12, 6), trim, [side * 0.07, 0.06, 0], undefined, [0, 0, -side * 0.6]);
+      if (id === 'phloeng') this.add(arm, geo('Cone', ConeGeometry, 0.03, 0.12, 6), trim, [side * 0.07, 0.06, 0], undefined, [0, 0, -side * 0.6]);
       this.add(arm, cap(0.054 * bulk, 0.19), suit, [0, -0.14, 0]);
       this.add(fore, cap(0.048 * bulk, 0.16), suit, [0, -0.12, 0]);
-      this.add(fore, new CylinderGeometry(0.06 * bulk, 0.068 * bulk, 0.17, 12), armor, [0, -0.15, 0]);
-      this.add(fore, new TorusGeometry(0.066 * bulk, 0.009, 6, 20), glow, [0, -0.09, 0], undefined, [Math.PI / 2, 0, 0]);
-      this.add(fore, new TorusGeometry(0.069 * bulk, 0.007, 6, 20), glow, [0, -0.2, 0], undefined, [Math.PI / 2, 0, 0]);
+      this.add(fore, geo('Cylinder', CylinderGeometry, 0.06 * bulk, 0.068 * bulk, 0.17, 12), armor, [0, -0.15, 0]);
+      this.add(fore, geo('Torus', TorusGeometry, 0.066 * bulk, 0.009, 6, 20), glow, [0, -0.09, 0], undefined, [Math.PI / 2, 0, 0]);
+      this.add(fore, geo('Torus', TorusGeometry, 0.069 * bulk, 0.007, 6, 20), glow, [0, -0.2, 0], undefined, [Math.PI / 2, 0, 0]);
       this.add(hand, sph, armor, [0, -0.045, 0.005], [0.058 * bulk, 0.055, 0.064 * bulk]);
-      this.add(hand, new CylinderGeometry(0.006, 0.006, 0.09, 4), glow, [0, -0.06, 0.06 * bulk], undefined, [0, 0, Math.PI / 2]);
+      this.add(hand, geo('Cylinder', CylinderGeometry, 0.006, 0.006, 0.09, 4), glow, [0, -0.06, 0.06 * bulk], undefined, [0, 0, Math.PI / 2]);
     }
 
     // Legs.
@@ -355,21 +374,19 @@ export class Rig {
       this.add(thigh, cap(0.078 * bulk, 0.3), suit, [0, -0.21, 0]);
       this.add(thigh, sphLo, armor, [0, -0.19, 0.045], [0.07 * bulk, 0.15, 0.05]);
       this.add(shin, cap(0.06 * bulk, 0.3), suit, [0, -0.21, 0]);
-      this.add(shin, new CylinderGeometry(0.075 * bulk, 0.064 * bulk, 0.3, 12), armor, [0, -0.25, 0.005]);
+      this.add(shin, geo('Cylinder', CylinderGeometry, 0.075 * bulk, 0.064 * bulk, 0.3, 12), armor, [0, -0.25, 0.005]);
       this.add(shin, sph, armor, [0, 0.0, 0.045], [0.07, 0.07, 0.06]);
-      this.add(shin, new CylinderGeometry(0.006, 0.006, 0.22, 4), glow, [0, -0.24, 0.072 * bulk]);
+      this.add(shin, geo('Cylinder', CylinderGeometry, 0.006, 0.006, 0.22, 4), glow, [0, -0.24, 0.072 * bulk]);
       this.add(foot, sph, armor, [0, -0.03, 0.055], [0.062 * bulk, 0.045, 0.13]);
-      this.add(foot, new TorusGeometry(0.066 * bulk, 0.008, 6, 18), glow, [0, 0.02, 0], [1, 1, 1], [Math.PI / 2, 0, 0]);
+      this.add(foot, geo('Torus', TorusGeometry, 0.066 * bulk, 0.008, 6, 18), glow, [0, 0.02, 0], [1, 1, 1], [Math.PI / 2, 0, 0]);
     }
 
-    if (ghost) {
-      const g = new MeshBasicMaterial({
-        color: new Color(this.def.accent).multiplyScalar(1.4), transparent: true, opacity: 0.5,
-        blending: AdditiveBlending, depthWrite: false,
-      });
-      for (const m of this.meshes) { m.material = g; m.castShadow = false; m.receiveShadow = false; }
-      this.mats.glow = g;
-    }
+  }
+
+  dispose() {
+    const m = this.mats;
+    for (const mat of [m.armor, m.suit, m.glow, m.trim]) mat.dispose();
+    for (const r of this.ribbons) r.dispose();
   }
 
   /** World position of a limb tip (fist or toe). */
@@ -377,18 +394,6 @@ export class Rig {
     const j = this.joints[limb];
     j.updateWorldMatrix(true, false);
     return out.set(0, limb.startsWith('hand') ? -0.06 : -0.03, limb.startsWith('foot') ? 0.14 : 0.02).applyMatrix4(j.matrixWorld);
-  }
-
-  copyPoseFrom(other: Rig) {
-    this.root.position.copy(other.root.position);
-    this.root.quaternion.copy(other.root.quaternion);
-    this.root.scale.copy(other.root.scale);
-    this.pivot.quaternion.copy(other.pivot.quaternion);
-    this.pivot.position.copy(other.pivot.position);
-    for (const j of JOINTS) {
-      this.joints[j].quaternion.copy(other.joints[j].quaternion);
-      this.joints[j].position.copy(other.joints[j].position);
-    }
   }
 }
 

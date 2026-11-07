@@ -67,6 +67,7 @@ class App {
   private endTimer = -1;
   private fpsAcc = 0;
   private fpsFrames = 0;
+  private reported = false;
 
   constructor() {
     this.root = document.getElementById('game') as HTMLDivElement;
@@ -74,14 +75,14 @@ class App {
     canvas.className = 'view';
     this.root.appendChild(canvas);
     this.engine = new Engine(canvas);
-    this.level = this.settings.quality === 'auto' ? autoStartLevel() : this.settings.quality;
+    this.level = this.settings.quality === 'auto' ? autoStartLevel(this.settings.autoCap) : this.settings.quality;
     this.engine.setQuality(QUALITY[this.level]);
     this.stage = new Stage(this.engine);
     this.fx = new Effects(this.engine.scene, QUALITY[this.level], this.engine.camera);
     this.director = new Director(this.engine);
     this.hud = new Hud(this.root);
     this.touch = new TouchControls(this.input, this.root);
-    this.tuner = new AutoTuner(() => this.downgrade());
+    this.tuner = new AutoTuner((steps) => this.downgrade(steps));
     this.tuner.enabled = this.settings.quality === 'auto';
     this.applyQuality();
     this.stage.onStrike = (d) => sound.thunder(d);
@@ -122,7 +123,9 @@ class App {
     } else {
       this.toTitle();
     }
-    this.engine.renderer.compile(this.engine.scene, this.engine.camera);
+    this.engine.onContextLost = () => this.onContextLost();
+    this.engine.onContextRestored = () => location.reload();
+    this.warmUp();
     document.getElementById('boot')?.classList.add('done');
     if (isMobileDevice() && innerHeight > innerWidth) this.hud.toast('หมุนจอเป็นแนวนอนจะเล่นมันกว่า');
     requestAnimationFrame((t) => this.frame(t));
@@ -139,20 +142,51 @@ class App {
     this.resize(true);
   }
 
-  private downgrade(): boolean {
+  private downgrade(steps = 1): boolean {
     const i = QUALITY_ORDER.indexOf(this.level);
     if (i >= QUALITY_ORDER.length - 1) return false;
-    this.level = QUALITY_ORDER[i + 1];
+    this.level = QUALITY_ORDER[Math.min(QUALITY_ORDER.length - 1, i + steps)];
     this.applyQuality();
+    // Remember what this device can sustain so the next visit starts there without stutter.
+    this.settings.autoCap = this.level;
+    saveSettings(this.settings);
     this.hud.toast(`ปรับกราฟิกเป็น "${QUALITY[this.level].label}" ให้ลื่นขึ้น`);
     return true;
+  }
+
+  /** Compiles every shader the game can show, so the first hit or super does not freeze the frame. */
+  private warmUp() {
+    const extra = [...this.fx.warmUpObjects(), ...this.views.flatMap((v) => v.ghostRoots)];
+    try {
+      this.engine.warmUp(extra);
+    } catch (err) {
+      console.warn('warm-up failed', err);
+    }
+    this.fx.endWarmUp();
+    this.tuner.reset();
+  }
+
+  private onContextLost() {
+    // The GPU gave up (usually out of memory). Drop two presets and reload.
+    const i = QUALITY_ORDER.indexOf(this.level);
+    const next = QUALITY_ORDER[Math.min(QUALITY_ORDER.length - 1, i + 2)];
+    if (this.settings.quality === 'auto') this.settings.autoCap = next;
+    else this.settings.quality = next;
+    saveSettings(this.settings);
+    sound.beam(false);
+    const el = document.createElement('div');
+    el.className = 'lost';
+    el.innerHTML = `<div><b>การ์ดจอรับภาระไม่ไหว</b><p>ลดกราฟิกเป็น "${QUALITY[next].label}" แล้ว กำลังโหลดใหม่…</p><button type="button" id="btn-reload">โหลดใหม่เลย</button></div>`;
+    this.root.appendChild(el);
+    el.querySelector('#btn-reload')!.addEventListener('click', () => location.reload());
+    window.setTimeout(() => location.reload(), 2500);
   }
 
   private onSettings(s: Settings) {
     saveSettings(s);
     sound.setVolumes(s.music, s.sfx);
     this.hud.fps.hidden = !s.fps;
-    const want = s.quality === 'auto' ? autoStartLevel() : s.quality;
+    const want = s.quality === 'auto' ? autoStartLevel(s.autoCap) : s.quality;
     this.tuner.enabled = s.quality === 'auto';
     this.tuner.reset();
     this.level = want;
@@ -183,6 +217,8 @@ class App {
     this.fight = fight;
     this.views = fight.f.map((f) => new FighterView(f, this.engine.scene, this.fx));
     this.acc = 0;
+    // Building fighters costs a frame or two; do not count that against the frame rate.
+    this.tuner.reset();
   }
 
   toTitle() {
@@ -325,8 +361,13 @@ class App {
       this.acc += raw * ts;
       let steps = 0;
       while (this.acc >= DT && steps < 5) {
-        fight.step(this.gatherInputs());
-        this.handleEvents(fight.events);
+        try {
+          fight.step(this.gatherInputs());
+          this.handleEvents(fight.events);
+        } catch (err) {
+          // Never let one bad frame take the whole game down.
+          if (!this.reported) { console.error(err); this.reported = true; }
+        }
         this.acc -= DT;
         steps++;
       }
@@ -338,7 +379,7 @@ class App {
     const quality = QUALITY[this.level].detail * this.settings.effects;
     for (const v of this.views) v.update(vdt, alpha, this.fx.eye, quality);
     if (fight) this.updateProjectileVisuals(fight, alpha, vdt);
-    this.director.update(raw, this.kind === 'showcase' ? null : fight);
+    this.director.update(raw, this.kind === 'showcase' ? null : fight, false, alpha);
     const focus = fight ? (fight.f[0].x + fight.f[1].x) / 2 : 0;
     this.stage.update(raw * (this.paused ? 0.15 : ts), focus);
     this.fx.update(vdt, this.time);
@@ -353,7 +394,8 @@ class App {
       this.fpsAcc += raw;
       this.fpsFrames++;
       if (this.fpsAcc > 0.5) {
-        this.hud.fps.textContent = `${Math.round(this.fpsFrames / this.fpsAcc)} FPS · ${QUALITY[this.level].label}`;
+        const e = this.engine;
+        this.hud.fps.textContent = `${Math.round(this.fpsFrames / this.fpsAcc)} FPS · ${QUALITY[this.level].label} · ${Math.round(e.width * e.pixelRatio)}×${Math.round(e.height * e.pixelRatio)}`;
         this.fpsAcc = 0;
         this.fpsFrames = 0;
       }

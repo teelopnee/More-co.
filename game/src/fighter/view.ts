@@ -1,6 +1,6 @@
 // Drives a Rig from simulation state every rendered frame: picks and blends animation,
 // adds procedural motion, and spawns the fighter's own effects (trails, aura, afterimages).
-import { Color, Euler, MathUtils, MeshBasicMaterial, Quaternion, Vector3, type Scene } from 'three';
+import { AdditiveBlending, Color, Euler, MathUtils, MeshBasicMaterial, Quaternion, Vector3, type Mesh, type Object3D, type Scene } from 'three';
 import type { Fighter } from '../sim/fight';
 import type { Effects } from '../fx/effects';
 import { hdr, Trail } from '../fx/effects';
@@ -22,11 +22,17 @@ function addRot(p: CompiledPose, j: Joint, x: number, y = 0, z = 0) {
   p.q[J[j]].multiply(dq);
 }
 
+/** Afterimage: a clone of the rig's hierarchy that shares its geometry. */
 interface Ghost {
-  rig: Rig;
+  root: Object3D;
+  pivot: Object3D;
+  joints: Object3D[];
   life: number;
   mat: MeshBasicMaterial;
 }
+
+const AURA_JOINTS: Joint[] = ['chest', 'hips', 'handL', 'handR', 'footL', 'footR', 'head', 'foreL', 'foreR'];
+const GHOSTS = 5;
 
 export class FighterView {
   readonly rig: Rig;
@@ -64,13 +70,33 @@ export class FighterView {
     this.rig.pivot.position.set(0, PIVOT_Y, 0);
     copyPose(COMPILED.guard, this.current);
     copyPose(COMPILED.guard, this.from);
+    for (let i = 0; i < GHOSTS; i++) {
+      const mat = new MeshBasicMaterial({
+        color: new Color(f.def.accent).multiplyScalar(1.4), transparent: true, opacity: 0.5,
+        blending: AdditiveBlending, depthWrite: false,
+      });
+      const root = this.rig.root.clone(true);
+      root.traverse((o) => {
+        const m = o as Mesh;
+        if (m.isMesh) { m.material = mat; m.castShadow = false; m.receiveShadow = false; }
+      });
+      root.visible = false;
+      scene.add(root);
+      this.ghosts.push({ root, pivot: root.children[0], joints: JOINTS.map((j) => root.getObjectByName(j)!), life: 0, mat });
+    }
+  }
+
+  /** Every ghost, for shader warm-up. */
+  get ghostRoots() {
+    return this.ghosts.map((g) => g.root);
   }
 
   dispose() {
     this.scene.remove(this.rig.root);
     for (const r of this.rig.ribbons) this.scene.remove(r.mesh);
-    for (const t of Object.values(this.trails)) this.scene.remove(t.mesh);
-    for (const g of this.ghosts) this.scene.remove(g.rig.root);
+    for (const t of Object.values(this.trails)) { this.scene.remove(t.mesh); t.dispose(); }
+    for (const g of this.ghosts) { this.scene.remove(g.root); g.mat.dispose(); }
+    this.rig.dispose();
   }
 
   resetCloth() {
@@ -172,6 +198,8 @@ export class FighterView {
   update(dt: number, alpha: number, eye: Vector3, quality: number) {
     const f = this.f;
     this.time += dt;
+    // Frozen fighters (hitstop, super flash) hold their pose instead of flickering between frames.
+    if (!f.advanced) alpha = 0;
     const x = f.px + (f.x - f.px) * alpha;
     const y = f.py + (f.y - f.py) * alpha;
     this.pos.set(x, y, 0);
@@ -284,11 +312,10 @@ export class FighterView {
     const rate = (maxed ? 70 : 14) * quality * this.auraScale;
     let n = rate * dt;
     const [r, g, b] = hdr(def.accent, maxed ? 4 : 2.4);
-    const joints: Joint[] = ['chest', 'hips', 'handL', 'handR', 'footL', 'footR', 'head', 'foreL', 'foreR'];
     while (n > 0) {
       if (n < 1 && Math.random() > n) break;
       n -= 1;
-      const j = rig.joints[joints[Math.floor(Math.random() * joints.length)]];
+      const j = rig.joints[AURA_JOINTS[Math.floor(Math.random() * AURA_JOINTS.length)]];
       j.getWorldPosition(tmp);
       fx.emit({
         x: tmp.x + rnd(-0.12, 0.12), y: tmp.y + rnd(-0.1, 0.1), z: tmp.z + rnd(-0.12, 0.12),
@@ -326,22 +353,25 @@ export class FighterView {
     this.ghostTimer -= dt;
     if (want && this.ghostTimer <= 0) {
       this.ghostTimer = 0.04;
-      let g = this.ghosts.find((x) => x.life <= 0);
-      if (!g && this.ghosts.length < 6) {
-        const rig = new Rig(f.def, true);
-        rig.pivot.position.set(0, PIVOT_Y, 0);
-        this.scene.add(rig.root);
-        g = { rig, life: 0, mat: rig.mats.glow };
-        this.ghosts.push(g);
-      }
+      const g = this.ghosts.find((x) => x.life <= 0);
       if (g) {
-        g.rig.copyPoseFrom(this.rig);
+        const rig = this.rig;
+        g.root.position.copy(rig.root.position);
+        g.root.quaternion.copy(rig.root.quaternion);
+        g.root.scale.copy(rig.root.scale);
+        g.pivot.position.copy(rig.pivot.position);
+        g.pivot.quaternion.copy(rig.pivot.quaternion);
+        for (let i = 0; i < JOINTS.length; i++) {
+          const src = rig.joints[JOINTS[i]];
+          g.joints[i].position.copy(src.position);
+          g.joints[i].quaternion.copy(src.quaternion);
+        }
         g.life = 0.28;
-        g.rig.root.visible = true;
+        g.root.visible = true;
       }
     }
     for (const g of this.ghosts) {
-      if (g.life <= 0) { g.rig.root.visible = false; continue; }
+      if (g.life <= 0) { g.root.visible = false; continue; }
       g.life -= dt;
       g.mat.opacity = Math.max(0, g.life / 0.28) * 0.55;
     }

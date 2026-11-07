@@ -15,9 +15,11 @@ export interface Settings {
   difficulty: Difficulty;
   roundTime: number;
   effects: number;
+  /** Lowest preset "auto" has needed on this device; later sessions start there. */
+  autoCap: QualityLevel | null;
 }
 
-export const DEFAULT_SETTINGS: Settings = { quality: 'auto', fps: false, music: 0.6, sfx: 0.9, difficulty: 'normal', roundTime: 99, effects: 1 };
+export const DEFAULT_SETTINGS: Settings = { quality: 'auto', fps: false, music: 0.6, sfx: 0.9, difficulty: 'normal', roundTime: 99, effects: 1, autoCap: null };
 
 const hex = (n: number) => `#${n.toString(16).padStart(6, '0')}`;
 
@@ -320,7 +322,7 @@ export class Screens {
       {
         label: 'คุณภาพกราฟิก',
         options: [{ label: 'อัตโนมัติ', value: 'auto' }, ...QUALITY_ORDER.map((q) => ({ label: QUALITY[q].label, value: q }))],
-        get: () => s.quality, set: (v) => { s.quality = v as Settings['quality']; ch(); },
+        get: () => s.quality, set: (v) => { s.quality = v as Settings['quality']; if (v === 'auto') s.autoCap = null; ch(); },
       },
       {
         label: 'เอฟเฟกต์อนุภาค', options: [{ label: 'ปกติ', value: 1 }, { label: 'จัดเต็ม ×1.5', value: 1.5 }, { label: 'เบาลง', value: 0.6 }],

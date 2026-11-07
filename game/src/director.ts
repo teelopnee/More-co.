@@ -87,7 +87,7 @@ export class Director {
     this.update(0, fight, true);
   }
 
-  update(dt: number, fight: Fight | null, snap = false) {
+  update(dt: number, fight: Fight | null, snap = false, alpha = 1) {
     this.time += dt;
     const cam = this.camera;
     const aspect = cam.aspect;
@@ -109,7 +109,7 @@ export class Director {
 
     if (fight) {
       const [a, b] = fight.f;
-      const ax = a.px + (a.x - a.px), bx = b.px + (b.x - b.px);
+      const ax = a.px + (a.x - a.px) * alpha, bx = b.px + (b.x - b.px) * alpha;
       const cine = this.cine;
       if (cine && cine.kind === 'super') {
         const f = fight.f[cine.who];

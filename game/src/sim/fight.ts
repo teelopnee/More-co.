@@ -104,6 +104,8 @@ export class Fighter {
   hitFlash = 0;
   /** Set when the last landed hit was a counter hit. */
   counterHit = false;
+  /** Whether this fighter moved on the last step (false during hitstop or a super freeze). */
+  advanced = false;
 
   constructor(readonly idx: number, id: CharId) {
     this.def = CHARACTERS[id];
@@ -213,6 +215,7 @@ export class Fight {
     for (let i = 0; i < 2; i++) {
       const f = this.f[i];
       f.px = f.x; f.py = f.y;
+      f.advanced = false;
       f.input = live ? inputs[i] : NEUTRAL;
       this.bufferInput(f, f.input);
     }
@@ -307,7 +310,7 @@ export class Fight {
   }
 
   private updateRules() {
-    if (this.phase !== 'fight' && this.phase !== 'go') return;
+    if (this.training || (this.phase !== 'fight' && this.phase !== 'go')) return;
     const [a, b] = this.f;
     const deadA = a.hp <= 0, deadB = b.hp <= 0;
     if (!deadA && !deadB) return;
@@ -427,6 +430,7 @@ export class Fight {
     const inp = f.input;
     const rel = Math.sign(inp.x) * f.facing;
     const speed = f.def.speed;
+    f.advanced = true;
     f.sf++;
     if (f.invuln > 0) f.invuln--;
 
@@ -703,15 +707,19 @@ export class Fight {
   private checkMelee() {
     const boxes = this.f.map((f) => this.hitbox(f));
     const hurts = this.f.map((f) => this.hurtbox(f));
+    // Moves are captured first so a trade (both connect on the same frame) resolves both hits.
+    const moves = this.f.map((f) => f.move);
+    const hits: { i: number; cx: number; cy: number }[] = [];
     for (let i = 0; i < 2; i++) {
       const hb = boxes[i];
       const hu = hurts[1 - i];
-      if (!hb || !hu) continue;
+      if (!hb || !hu || !moves[i]) continue;
       if (hb.x1 < hu.x0 || hb.x0 > hu.x1 || hb.y1 < hu.y0 || hb.y0 > hu.y1) continue;
-      const cx = (Math.max(hb.x0, hu.x0) + Math.min(hb.x1, hu.x1)) / 2;
-      const cy = (Math.max(hb.y0, hu.y0) + Math.min(hb.y1, hu.y1)) / 2;
-      const a = this.f[i];
-      this.resolveHit(a, this.f[1 - i], a.move!, a.x, cx, cy, false, false);
+      hits.push({ i, cx: (Math.max(hb.x0, hu.x0) + Math.min(hb.x1, hu.x1)) / 2, cy: (Math.max(hb.y0, hu.y0) + Math.min(hb.y1, hu.y1)) / 2 });
+    }
+    for (const h of hits) {
+      const a = this.f[h.i];
+      this.resolveHit(a, this.f[1 - h.i], moves[h.i]!, a.x, h.cx, h.cy, false, false);
     }
   }
 
@@ -742,7 +750,7 @@ export class Fight {
       d.crouching = d.input.y < 0;
       d.vx = dir * mv.push * 0.75;
       dmg = mv.chip ?? 0;
-      if (dmg) d.hp = Math.max(mv.id === 'super' ? 0 : 1, d.hp - dmg);
+      if (dmg) d.hp = Math.max(mv.id === 'super' && !this.training ? 0 : 1, d.hp - dmg);
       if (!projectile) a.hitstop = Math.round(stop * 0.6);
       d.hitstop = Math.round(stop * 0.6);
       d.meter = Math.min(METER_MAX, d.meter + 3);

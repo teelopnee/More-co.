@@ -1,10 +1,11 @@
 // Renderer, post-processing chain and planar reflections.
 import {
-  ACESFilmicToneMapping, Color, HalfFloatType, Matrix4, Mesh, PCFShadowMap, PerspectiveCamera, Plane,
-  Scene, SRGBColorSpace, Vector2, Vector3, Vector4, WebGLRenderTarget, WebGLRenderer, type Object3D,
+  ACESFilmicToneMapping, Color, HalfFloatType, Matrix4, Mesh, NoBlending, PCFShadowMap, PerspectiveCamera, Plane,
+  Scene, ShaderMaterial, SRGBColorSpace, Vector2, Vector3, Vector4, WebGLRenderTarget, WebGLRenderer, type Object3D,
 } from 'three';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
-import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { FullScreenQuad, Pass } from 'three/examples/jsm/postprocessing/Pass.js';
+import { CopyShader } from 'three/examples/jsm/shaders/CopyShader.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
@@ -228,17 +229,74 @@ export interface PostFx {
   light: Vector2;
 }
 
+/**
+ * Renders the scene into a single multisampled target (when MSAA is on) and resolves it into the
+ * composer's buffer. Keeping MSAA out of the ping-pong buffers saves a lot of GPU memory.
+ */
+class ScenePass extends Pass {
+  private msaa: WebGLRenderTarget | null = null;
+  private readonly quad = new FullScreenQuad(new ShaderMaterial({
+    uniforms: { tDiffuse: { value: null } },
+    vertexShader: CopyShader.vertexShader,
+    fragmentShader: /* glsl */ `
+      uniform sampler2D tDiffuse;
+      varying vec2 vUv;
+      void main() { gl_FragColor = texture2D(tDiffuse, vUv); }
+    `,
+    depthTest: false, depthWrite: false, blending: NoBlending,
+  }));
+  private w = 1;
+  private h = 1;
+
+  constructor(private readonly scene: Scene, private readonly camera: PerspectiveCamera) {
+    super();
+    this.needsSwap = false;
+  }
+
+  setSamples(n: number) {
+    if ((this.msaa?.samples ?? 0) === n) return;
+    this.msaa?.dispose();
+    this.msaa = n > 0 ? new WebGLRenderTarget(this.w, this.h, { type: HalfFloatType, samples: n }) : null;
+  }
+
+  setSize(w: number, h: number) {
+    this.w = w;
+    this.h = h;
+    this.msaa?.setSize(w, h);
+  }
+
+  render(renderer: WebGLRenderer, _write: WebGLRenderTarget, readBuffer: WebGLRenderTarget) {
+    if (this.msaa) {
+      renderer.setRenderTarget(this.msaa);
+      renderer.clear();
+      renderer.render(this.scene, this.camera);
+      (this.quad.material as ShaderMaterial).uniforms.tDiffuse.value = this.msaa.texture;
+      renderer.setRenderTarget(readBuffer);
+      this.quad.render(renderer);
+    } else {
+      renderer.setRenderTarget(readBuffer);
+      renderer.clear();
+      renderer.render(this.scene, this.camera);
+    }
+  }
+
+  dispose() {
+    this.msaa?.dispose();
+    this.quad.dispose();
+  }
+}
+
 export class Engine {
   readonly renderer: WebGLRenderer;
   readonly scene = new Scene();
   readonly camera = new PerspectiveCamera(36, 1, 0.1, 1500);
   readonly mirror = new Mirror();
-  composer!: EffectComposer;
-  private renderPass!: RenderPass;
-  bloom!: UnrealBloomPass;
-  private fxPass!: ShaderPass;
-  private fxaa!: FXAAPass;
-  private grade!: ShaderPass;
+  readonly composer: EffectComposer;
+  private readonly scenePass: ScenePass;
+  readonly bloom: UnrealBloomPass;
+  private readonly fxPass: ShaderPass;
+  private readonly fxaa: FXAAPass;
+  private readonly grade: ShaderPass;
   quality: Quality = QUALITY.high;
   readonly post: PostFx = {
     ca: 0, radial: 0, center: new Vector2(0.5, 0.5), flash: 0, flashColor: new Color(1, 1, 1),
@@ -248,7 +306,12 @@ export class Engine {
   readonly mirrorHide: Object3D[] = [];
   width = 1;
   height = 1;
+  /** Internal resolution actually rendered, for the FPS readout. */
+  pixelRatio = 1;
   private time = 0;
+  contextLost = false;
+  onContextLost: (() => void) | null = null;
+  onContextRestored: (() => void) | null = null;
 
   constructor(readonly canvas: HTMLCanvasElement) {
     this.renderer = new WebGLRenderer({
@@ -259,42 +322,39 @@ export class Engine {
     this.renderer.toneMappingExposure = 1.05;
     this.renderer.shadowMap.type = PCFShadowMap;
     this.camera.layers.enable(LAYER_NO_REFLECT);
-    this.buildComposer();
+    canvas.addEventListener('webglcontextlost', (e) => {
+      e.preventDefault();
+      this.contextLost = true;
+      this.onContextLost?.();
+    });
+    canvas.addEventListener('webglcontextrestored', () => {
+      this.contextLost = false;
+      this.onContextRestored?.();
+    });
+
+    this.composer = new EffectComposer(this.renderer, new WebGLRenderTarget(1, 1, { type: HalfFloatType }));
+    this.scenePass = new ScenePass(this.scene, this.camera);
+    this.bloom = new UnrealBloomPass(new Vector2(256, 256), 0.75, 0.42, 1.05);
+    this.fxPass = new ShaderPass(FX_SHADER);
+    this.fxaa = new FXAAPass();
+    this.grade = new ShaderPass(GRADE_SHADER);
+    for (const pass of [this.scenePass, this.bloom, this.fxPass, new OutputPass(), this.fxaa, this.grade]) this.composer.addPass(pass);
   }
 
   get maxSamples() {
     return this.renderer.capabilities.maxSamples ?? 4;
   }
 
-  private buildComposer() {
-    const q = this.quality;
-    const samples = Math.min(q.msaa, this.maxSamples);
-    const rt = new WebGLRenderTarget(this.width, this.height, { type: HalfFloatType, samples });
-    this.composer?.dispose();
-    this.composer = new EffectComposer(this.renderer, rt);
-    this.renderPass ??= new RenderPass(this.scene, this.camera);
-    this.bloom ??= new UnrealBloomPass(new Vector2(256, 256), 0.75, 0.42, 1.05);
-    if (!this.fxPass) this.fxPass = new ShaderPass(FX_SHADER);
-    this.fxaa ??= new FXAAPass();
-    if (!this.grade) this.grade = new ShaderPass(GRADE_SHADER);
-    this.composer.addPass(this.renderPass);
-    this.composer.addPass(this.bloom);
-    this.composer.addPass(this.fxPass);
-    this.composer.addPass(new OutputPass());
-    if (q.fxaa) this.composer.addPass(this.fxaa);
-    this.composer.addPass(this.grade);
-  }
-
   setQuality(q: Quality) {
-    const shadowChange = (q.shadows > 0) !== (this.quality.shadows > 0);
+    const shadowChange = (q.shadows > 0) !== (this.quality.shadows > 0) || !this.renderer.shadowMap.enabled === q.shadows > 0;
     this.quality = q;
     this.renderer.shadowMap.enabled = q.shadows > 0;
     this.mirror.enabled = q.reflection > 0;
     this.mirror.scale = q.reflection || 0.25;
-    const defines = this.fxPass?.material.defines as Record<string, number> | undefined;
-    this.buildComposer();
+    this.scenePass.setSamples(Math.min(q.msaa, this.maxSamples));
+    this.fxaa.enabled = q.fxaa;
     const fxDefines = this.fxPass.material.defines as Record<string, number>;
-    if (!defines || defines.GR_SAMPLES !== q.godRays) {
+    if (fxDefines.GR_SAMPLES !== q.godRays) {
       fxDefines.GR_SAMPLES = q.godRays;
       this.fxPass.material.needsUpdate = true;
     }
@@ -312,16 +372,19 @@ export class Engine {
     if (!force && w === this.width && h === this.height) return;
     this.width = Math.max(1, w);
     this.height = Math.max(1, h);
-    const pr = Math.min(window.devicePixelRatio || 1, this.quality.maxPixelRatio);
+    // Cap the internal resolution by a pixel budget so big or high-DPI screens stay smooth.
+    const budget = Math.sqrt(this.quality.pixelBudget / (this.width * this.height));
+    const pr = Math.max(0.5, Math.min(window.devicePixelRatio || 1, this.quality.maxPixelRatio, budget));
+    this.pixelRatio = pr;
     this.renderer.setPixelRatio(pr);
     this.renderer.setSize(this.width, this.height, false);
     this.composer.setPixelRatio(pr);
     this.composer.setSize(this.width, this.height);
-    const bw = Math.round(this.width * pr * this.quality.bloomScale);
-    const bh = Math.round(this.height * pr * this.quality.bloomScale);
-    this.bloom.setSize(bw, bh);
-    this.fxaa.setSize(this.width * pr, this.height * pr);
-    this.mirror.setSize(this.width * pr, this.height * pr);
+    const pw = Math.round(this.width * pr), ph = Math.round(this.height * pr);
+    this.scenePass.setSize(pw, ph);
+    this.bloom.setSize(Math.round(pw * this.quality.bloomScale), Math.round(ph * this.quality.bloomScale));
+    this.fxaa.setSize(pw, ph);
+    this.mirror.setSize(pw, ph);
     this.camera.aspect = this.width / this.height;
     this.camera.updateProjectionMatrix();
     const aspect = this.width / this.height;
@@ -329,7 +392,20 @@ export class Engine {
     this.grade.uniforms.uAspect.value = aspect;
   }
 
+  /** Compiles every material once so the first hit, projectile or super does not hitch. */
+  warmUp(show: Object3D[]) {
+    const hidden = show.filter((o) => !o.visible);
+    for (const o of hidden) o.visible = true;
+    try {
+      this.renderer.compile(this.scene, this.camera);
+      this.render(0);
+    } finally {
+      for (const o of hidden) o.visible = false;
+    }
+  }
+
   render(dt: number) {
+    if (this.contextLost) return;
     this.time += dt;
     const p = this.post;
     const fu = this.fxPass.uniforms;

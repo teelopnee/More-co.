@@ -13,8 +13,11 @@ import { Particles, type Emit } from './particles';
 const v = new Vector3();
 const rnd = (a: number, b: number) => a + (b - a) * Math.random();
 
+const linCache = new Map<number, Color>();
+/** Linear colour of a hex value times an HDR multiplier. */
 export function hdr(hex: number, k: number): [number, number, number] {
-  const c = new Color(hex);
+  let c = linCache.get(hex);
+  if (!c) { c = new Color(hex); linCache.set(hex, c); }
   return [c.r * k, c.g * k, c.b * k];
 }
 
@@ -63,6 +66,7 @@ export class Arcs {
   private readonly side = new Vector3();
   private readonly tan = new Vector3();
   private readonly view = new Vector3();
+  private readonly pool = Array.from({ length: 24 }, () => new Vector3());
 
   constructor(maxPoints: number, color: [number, number, number]) {
     this.cap = maxPoints;
@@ -103,24 +107,25 @@ export class Arcs {
 
   /** Adds a jagged arc from a to b. Consecutive arcs are separated by degenerate segments. */
   arc(a: Vector3, b: Vector3, segments: number, jitter: number, width: number, eye: Vector3) {
+    segments = Math.min(segments, this.pool.length - 1);
     if (this.n + segments + 3 > this.cap) return;
-    const pts: Vector3[] = [];
+    const pts = this.pool;
     for (let i = 0; i <= segments; i++) {
       const t = i / segments;
-      const p = new Vector3().lerpVectors(a, b, t);
+      const p = pts[i].lerpVectors(a, b, t);
       if (i > 0 && i < segments) p.add(v.set(rnd(-1, 1), rnd(-1, 1), rnd(-1, 1)).multiplyScalar(jitter * Math.sin(t * Math.PI)));
-      pts.push(p);
     }
     // Degenerate joint so separate arcs do not connect visibly.
     this.write(pts[0], 0);
-    for (let i = 0; i < pts.length; i++) {
+    const last = segments;
+    for (let i = 0; i <= last; i++) {
       const p = pts[i];
-      this.tan.subVectors(pts[Math.min(pts.length - 1, i + 1)], pts[Math.max(0, i - 1)]).normalize();
+      this.tan.subVectors(pts[Math.min(last, i + 1)], pts[Math.max(0, i - 1)]).normalize();
       this.view.subVectors(eye, p).normalize();
       this.side.crossVectors(this.tan, this.view).normalize().multiplyScalar(width * (1 - Math.abs(i / segments - 0.5)));
       this.writeSide(p, this.side);
     }
-    this.write(pts[pts.length - 1], 0);
+    this.write(pts[last], 0);
   }
 
   private write(p: Vector3, w: number) {
@@ -149,7 +154,11 @@ export class Trail {
   readonly mesh: Mesh;
   private readonly pts: Vector3[] = [];
   private readonly ages: number[] = [];
+  private readonly spare: Vector3[] = [];
   private readonly geo = new BufferGeometry();
+  private readonly tv = new Vector3();
+  private readonly vv = new Vector3();
+  private readonly sv = new Vector3();
   private readonly pos: Float32Array;
   private readonly alpha: Float32Array;
   private readonly max = 16;
@@ -192,13 +201,13 @@ export class Trail {
   update(dt: number, tip: Vector3 | null, eye: Vector3) {
     for (let i = 0; i < this.ages.length; i++) this.ages[i] += dt;
     if (tip && this.active) {
-      this.pts.unshift(tip.clone());
+      this.pts.unshift((this.spare.pop() ?? new Vector3()).copy(tip));
       this.ages.unshift(0);
     }
-    while (this.pts.length > this.max || (this.ages.length && this.ages[this.ages.length - 1] > 0.14)) { this.pts.pop(); this.ages.pop(); }
+    while (this.pts.length > this.max || (this.ages.length && this.ages[this.ages.length - 1] > 0.14)) { this.spare.push(this.pts.pop()!); this.ages.pop(); }
     const n = this.pts.length;
     if (n < 2) { this.geo.setDrawRange(0, 0); return; }
-    const t = new Vector3(), view = new Vector3(), s = new Vector3();
+    const t = this.tv, view = this.vv, s = this.sv;
     for (let i = 0; i < n; i++) {
       const p = this.pts[i];
       t.subVectors(this.pts[Math.min(n - 1, i + 1)], this.pts[Math.max(0, i - 1)]).normalize();
@@ -206,12 +215,19 @@ export class Trail {
       s.crossVectors(t, view).normalize();
       const a = Math.max(0, 1 - this.ages[i] / 0.14) * (1 - i / n);
       const w = this.width * a;
-      this.pos.set([p.x + s.x * w, p.y + s.y * w, p.z + s.z * w, p.x - s.x * w, p.y - s.y * w, p.z - s.z * w], i * 6);
+      const o = i * 6;
+      this.pos[o] = p.x + s.x * w; this.pos[o + 1] = p.y + s.y * w; this.pos[o + 2] = p.z + s.z * w;
+      this.pos[o + 3] = p.x - s.x * w; this.pos[o + 4] = p.y - s.y * w; this.pos[o + 5] = p.z - s.z * w;
       this.alpha[i * 2] = this.alpha[i * 2 + 1] = a;
     }
     this.geo.setDrawRange(0, (n - 1) * 6);
     (this.geo.attributes.position as BufferAttribute).needsUpdate = true;
     (this.geo.attributes.aAlpha as BufferAttribute).needsUpdate = true;
+  }
+
+  dispose() {
+    this.geo.dispose();
+    (this.mesh.material as ShaderMaterial).dispose();
   }
 }
 
@@ -404,6 +420,8 @@ export class Effects {
   private quality: Quality;
   private budget = 1;
   eye = new Vector3();
+  private readonly tmpB = new Vector3();
+  private readonly zapPool: { pos: Vector3; r: number; n: number; life: number }[] = [];
 
   constructor(scene: Scene, q: Quality, private readonly camera: Camera) {
     this.quality = q;
@@ -545,7 +563,10 @@ export class Effects {
 
   private zapTimer: { pos: Vector3; r: number; n: number; life: number }[] = [];
   zap(pos: Vector3, radius: number, n: number, life = 0.12) {
-    this.zapTimer.push({ pos: pos.clone(), r: radius, n, life });
+    if (this.zapTimer.length > 24) return;
+    const z = this.zapPool.pop() ?? { pos: new Vector3(), r: 0, n: 0, life: 0 };
+    z.pos.copy(pos); z.r = radius; z.n = n; z.life = life;
+    this.zapTimer.push(z);
   }
 
   flames(pos: Vector3, spread: number, n: number) {
@@ -650,10 +671,7 @@ export class Effects {
   endProjectile(id: number, x: number, y: number) {
     const p = this.projectiles.get(id);
     if (!p) return;
-    this.releaseLight(p.light);
-    this.group.remove(p.group);
-    p.group.traverse((o) => { const m = o as Mesh; if (m.geometry) { m.geometry.dispose(); (m.material as ShaderMaterial).dispose(); } });
-    this.projectiles.delete(id);
+    this.removeProjectile(p);
     const d = CHARACTERS[p.char];
     const [r, g, b] = hdr(d.accent, 4);
     this.add.emit({ x, y, z: 0.2, life: 0.15, size: 1.4, sizeEnd: 0.4, r: 3, g: 3, b: 3 });
@@ -701,8 +719,8 @@ export class Effects {
       if (p.char === 'vayu' && this.quality.detail >= 0.6) {
         for (let i = 0; i < 3; i++) {
           const a = Math.random() * Math.PI * 2;
-          const bpos = new Vector3(pos.x + Math.cos(a) * 0.65, pos.y + Math.sin(a) * 0.65, pos.z + rnd(-0.3, 0.3));
-          this.arcs.arc(pos, bpos, 6, 0.12, 0.018, this.eye);
+          this.tmpB.set(pos.x + Math.cos(a) * 0.65, pos.y + Math.sin(a) * 0.65, pos.z + rnd(-0.3, 0.3));
+          this.arcs.arc(pos, this.tmpB, 6, 0.12, 0.018, this.eye);
         }
       }
     }
@@ -717,8 +735,8 @@ export class Effects {
       const a = Math.random() * Math.PI * 2;
       const el = rnd(-1, 1);
       const R = rnd(1.4, 2.6);
-      const p = new Vector3(Math.cos(a) * R, Math.sin(a) * R * 0.8 + el * 0.4, rnd(-1, 1)).add(center);
-      const vel = new Vector3().subVectors(center, p).multiplyScalar(rnd(2.5, 4));
+      const p = this.tmpB.set(Math.cos(a) * R, Math.sin(a) * R * 0.8 + el * 0.4, rnd(-1, 1)).add(center);
+      const vel = v.subVectors(center, p).multiplyScalar(rnd(2.5, 4));
       this.add.emit({ x: p.x, y: p.y, z: p.z, vx: vel.x, vy: vel.y, vz: vel.z, life: 0.32, size: rnd(0.03, 0.06), r, g, b, stretch: 0.06 });
     }
     this.add.emit({ x: center.x, y: center.y, z: center.z, life: 0.08, size: 0.4 + t * 0.9, r: r * 0.35, g: g * 0.35, b: b * 0.35 });
@@ -737,10 +755,10 @@ export class Effects {
       z.life -= dt;
       for (let k = 0; k < z.n; k++) {
         const a = Math.random() * Math.PI * 2;
-        const e = new Vector3(Math.cos(a), Math.sin(a), rnd(-0.5, 0.5)).multiplyScalar(z.r * rnd(0.5, 1)).add(z.pos);
-        this.arcs.arc(z.pos, e, 7, z.r * 0.18, 0.022, this.eye);
+        this.tmpB.set(Math.cos(a), Math.sin(a), rnd(-0.5, 0.5)).multiplyScalar(z.r * rnd(0.5, 1)).add(z.pos);
+        this.arcs.arc(z.pos, this.tmpB, 7, z.r * 0.18, 0.022, this.eye);
       }
-      if (z.life <= 0) this.zapTimer.splice(i, 1);
+      if (z.life <= 0) { this.zapTimer.splice(i, 1); this.zapPool.push(z); }
     }
     this.arcs.end();
     this.beam.update(dt, time);
@@ -786,13 +804,30 @@ export class Effects {
     }
   }
 
+  private removeProjectile(p: ProjectileVis) {
+    this.releaseLight(p.light);
+    this.group.remove(p.group);
+    p.group.traverse((o) => { const m = o as Mesh; if (m.geometry) { m.geometry.dispose(); (m.material as ShaderMaterial).dispose(); } });
+    this.projectiles.delete(p.id);
+  }
+
+  /** Objects that only appear during play, made visible briefly so their shaders compile up front. */
+  warmUpObjects(): Group[] {
+    const ids = [-1, -2, -3];
+    (['vayu', 'phloeng', 'chantra'] as CharId[]).forEach((c, i) => this.projectile(ids[i], c, i * 2, -20, 1));
+    this.ring(v.set(0, -20, 0), [1, 1, 1], 1, 0.01);
+    return [this.beam.group, ...this.rings.map((r) => r.mesh as unknown as Group)];
+  }
+
+  endWarmUp() {
+    for (const id of [-1, -2, -3]) { const p = this.projectiles.get(id); if (p) this.removeProjectile(p); }
+    for (const r of this.rings) { r.life = 0; r.mesh.visible = false; }
+    this.clearAll();
+  }
+
   clearAll() {
-    for (const id of [...this.projectiles.keys()]) {
-      const p = this.projectiles.get(id)!;
-      this.releaseLight(p.light);
-      this.group.remove(p.group);
-      this.projectiles.delete(id);
-    }
+    for (const p of [...this.projectiles.values()]) this.removeProjectile(p);
+    this.zapTimer.length = 0;
     this.beam.stop();
     this.beamLight(0, 0, 0, false);
     this.add.clear();

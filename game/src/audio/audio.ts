@@ -340,6 +340,8 @@ export class Sound {
   private schedule() {
     if (!this.ctx) return;
     const spb = 60 / 132 / 4;
+    // After the tab was hidden, skip the missed notes instead of firing them all at once.
+    if (this.nextNote < this.now() - 0.2) this.nextNote = this.now() + 0.05;
     while (this.nextNote < this.now() + 0.12) {
       this.playStep(this.step, this.nextNote);
       this.nextNote += spb;
