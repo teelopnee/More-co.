@@ -113,7 +113,8 @@ function animated(update) {
       update();
       nameVisible();
     });
-    t.finished.finally(() => n === transitions && nameVisible(false));
+    t.ready.catch(() => {}); // skipped when another change starts first: fine
+    t.finished.then(() => n === transitions && nameVisible(false), () => {});
     return t.updateCallbackDone.catch(() => {});
   } catch {
     update();
@@ -209,45 +210,62 @@ function taskItem(t, { withDay = false } = {}) {
 </li>`;
 }
 
-const HERO_RING = 169.65;
+const VIEW_NAMES = { tasks: 'งาน', notes: 'โน้ต', focus: 'โฟกัส' };
 
-/** Greeting, what is left today, and what comes next. */
+function greeting() {
+  const hour = new Date().getHours();
+  return hour < 5 ? 'ดึกแล้ว พักผ่อนบ้างนะ' : hour < 11 ? 'อรุณสวัสดิ์' : hour < 13 ? 'สวัสดีตอนเที่ยง' : hour < 17 ? 'สวัสดีตอนบ่าย' : hour < 21 ? 'สวัสดีตอนเย็น' : 'ดึกแล้ว พักผ่อนบ้างนะ';
+}
+
+/**
+ * The extended app bar's dynamic title (One UI): what is left today and a Now Bar-style capsule
+ * for what comes next. The notes and focus pages get their own title.
+ */
 function renderHero() {
-  const now = new Date();
-  const hour = now.getHours();
-  const greet =
-    hour < 5 ? 'ดึกแล้ว พักผ่อนบ้างนะ' : hour < 11 ? 'อรุณสวัสดิ์' : hour < 13 ? 'สวัสดีตอนเที่ยง' : hour < 17 ? 'สวัสดีตอนบ่าย' : hour < 21 ? 'สวัสดีตอนเย็น' : 'ดึกแล้ว พักผ่อนบ้างนะ';
+  $('#bar-title').textContent = mode === 'panel' ? 'แปะไว้' : VIEW_NAMES[view];
+  if (view === 'notes') {
+    $('#hero-title').textContent = 'โน้ต';
+    $('#hero-greet').textContent = noteDay === today ? `วันนี้ · ${shortDate(today)}` : longDate(noteDay);
+    $('#hero-sub').innerHTML = '';
+    return;
+  }
+  if (view === 'focus') {
+    const st = S.stats(state, today, Date.now());
+    $('#hero-title').textContent = 'โฟกัส';
+    $('#hero-greet').textContent = st.focusTodayMs >= 60_000 ? `วันนี้โฟกัสไปแล้ว ${inWords(Math.round(st.focusTodayMs / 60_000))}` : 'ตั้งเวลาแล้วทำทีละเรื่อง';
+    $('#hero-sub').innerHTML = '';
+    return;
+  }
   const v = S.taskViews(state, today, 0);
   const list = v.today;
   const open = openCount(list);
   const done = list.length - open;
-  $('#hero-greet').textContent = `${greet} · ${shortDate(today)}`;
   $('#hero-title').textContent = !list.length ? 'วันนี้ยังว่าง' : open ? `วันนี้เหลือ ${open} เรื่อง` : 'วันนี้เคลียร์หมดแล้ว';
+  $('#hero-greet').textContent = `${greeting()} · ${shortDate(today)}${list.length ? ` · เสร็จ ${done}/${list.length}` : ''}`;
 
   const timed = list.filter((t) => !t.done && t.time && t.day === today).sort((a, b) => a.time.localeCompare(b.time));
   const next = timed.find((t) => minutesUntil(t) >= 0);
   const missed = timed.filter((t) => minutesUntil(t) < 0).at(-1);
   const inboxOpen = openCount(v.inbox);
-  let sub;
+  const capsule = (cls, when, what, after) =>
+    `<span class="next${cls}"><span class="nb-dot">${icon('i-clock')}</span><span class="when">${esc(when)}</span><span class="what">${esc(what)}</span>${after ? `<span class="in">${esc(after)}</span>` : ''}</span>`;
+  let sub = '';
   if (next) {
     const mins = minutesUntil(next);
-    sub = `<span class="next${mins <= 30 ? ' soon' : ''}">${icon('i-clock')}${esc(next.time)} ${esc(next.text)}</span> · อีก ${inWords(mins)}`;
+    sub = capsule(mins <= 30 ? ' soon' : '', next.time, next.text, `อีก ${inWords(mins)}`);
   } else if (missed) {
-    sub = `<span class="next late">${icon('i-clock')}เลย ${esc(missed.time)} แล้ว: ${esc(missed.text)}</span>`;
+    sub = capsule(' late', missed.time, missed.text, 'เลยเวลาแล้ว');
   } else if (v.overdue) {
     sub = `ค้างจากวันก่อน ${v.overdue} เรื่อง`;
   } else if (inboxOpen) {
     sub = `ในกล่องรับมี ${inboxOpen} เรื่องรอจัดวัน`;
-  } else if (done) {
-    sub = `เสร็จไปแล้ว ${done} เรื่อง เก่งมาก`;
-  } else {
+  } else if (!list.length) {
     sub = 'นึกอะไรออกก็แปะไว้ก่อน แล้วค่อยจัดทีหลัง';
   }
   $('#hero-sub').innerHTML = sub;
-  const frac = list.length ? done / list.length : 0;
-  $('.hr-bar').style.strokeDashoffset = String(HERO_RING * (1 - frac));
-  $('#hero-count').textContent = list.length ? `${done}/${list.length}` : '–';
 }
+
+const WEEKDAYS_SHORT = ['อา', 'จ', 'อ', 'พ', 'พฤ', 'ศ', 'ส'];
 
 const openCount = (list) => list.filter((t) => !t.done).length;
 const countLabel = (n) => (n ? String(n) : '');
@@ -261,7 +279,7 @@ function renderTasks() {
 
   const col = $('#col-today');
   $('.count', col).textContent = countLabel(openCount(v.today));
-  $('#today-sub').textContent = longDate(today);
+  $('#today-sub').textContent = shortDate(today);
   $('.list', col).innerHTML = v.today.map((t) => taskItem(t)).join('');
   const carry = $('.carry', col);
   carry.hidden = v.overdue === 0;
@@ -270,16 +288,27 @@ function renderTasks() {
   const ahead = $('#col-ahead');
   const aheadOpen = v.ahead.reduce((n, g) => n + openCount(g.tasks), 0) + v.later.length;
   $('.count', ahead).textContent = countLabel(aheadOpen);
-  const days = v.ahead.map(
-    (g) => `<section class="day${g.tasks.length ? '' : ' empty-day'}">
-<h3>${esc(dayLabel(g.day, today))}${dayLabel(g.day, today) === shortDate(g.day, today) ? '' : ` <span class="dim">${esc(shortDate(g.day, today))}</span>`}</h3>
-${g.tasks.length ? `<ul class="list">${g.tasks.map((t) => taskItem(t)).join('')}</ul>` : ''}
-</section>`,
-  );
+  // Week strip (Samsung Calendar style): today + 6 days, a dot per task.
+  const week = [{ day: today, tasks: v.today.filter((t) => t.day === today) }, ...v.ahead];
+  $('#week').innerHTML = week
+    .map(({ day, tasks }) => {
+      const d = fromKey(day);
+      const dots = tasks.slice(0, 3).map((t) => `<i${t.done ? ' class="done"' : ''}></i>`).join('');
+      const cls = `${day === today ? 'is-today' : ''}${d.getDay() === 0 ? ' sun' : ''}`;
+      return `<button type="button" role="listitem" class="${cls}" data-day="${day}" aria-label="${esc(shortDate(day, today))} ${tasks.length} เรื่อง"><span class="wd">${WEEKDAYS_SHORT[d.getDay()]}</span><span class="dn">${d.getDate()}</span><span class="dots">${dots}</span></button>`;
+    })
+    .join('');
+  const days = v.ahead
+    .filter((g) => g.tasks.length)
+    .map((g) => {
+      const label = dayLabel(g.day, today);
+      const date = shortDate(g.day, today);
+      return `<section class="day" id="day-${g.day}"><h3>${esc(label)}${label === date ? '' : ` <span class="dn2">${esc(date)}</span>`}</h3><ul class="list">${g.tasks.map((t) => taskItem(t)).join('')}</ul></section>`;
+    });
   if (v.later.length) {
     days.push(`<section class="day"><h3>หลังจากนั้น</h3><ul class="list">${v.later.map((t) => taskItem(t, { withDay: true })).join('')}</ul></section>`);
   }
-  $('.ahead', ahead).innerHTML = days.join('');
+  $('.ahead', ahead).innerHTML = days.length ? days.join('') : '<p class="ahead-empty">ยังไม่มีอะไรในสัปดาห์นี้ แตะวันด้านบนเพื่อแปะลงวันนั้น</p>';
 }
 
 function flash(id, cls = 'flash', scroll = true) {
@@ -441,6 +470,9 @@ function setView(next) {
   for (const tab of $$('.tabs [role="tab"]')) tab.setAttribute('aria-selected', String(tab.dataset.view === next));
   for (const id of ['tasks', 'notes', 'focus']) $(`#view-${id}`).hidden = id !== next;
   moveInk();
+  renderHero();
+  renderFocus();
+  if (innerWidth < 840) scrollTo({ top: 0 });
   if (next === 'notes') syncNote();
   if (next === 'focus') renderFocus();
 }
@@ -452,7 +484,8 @@ function moveInk() {
   const ink = $('#tab-ink');
   if (!tab || !tabs.offsetWidth) return;
   ink.style.width = `${tab.offsetWidth}px`;
-  ink.style.transform = `translateX(${tab.offsetLeft}px)`;
+  ink.style.height = `${tab.offsetHeight}px`;
+  ink.style.transform = `translate(${tab.offsetLeft}px, ${tab.offsetTop}px)`;
   tabs.classList.add('ready');
 }
 addEventListener('resize', moveInk);
@@ -569,6 +602,24 @@ function endSwipe(e) {
 }
 board.addEventListener('pointerup', endSwipe);
 board.addEventListener('pointercancel', endSwipe);
+
+$('#week').addEventListener('click', (e) => {
+  const day = e.target.closest('[data-day]')?.dataset.day;
+  if (!day) return;
+  const target = day === today ? $('#col-today') : document.getElementById(`day-${day}`);
+  if (target) {
+    target.scrollIntoView({ behavior: calm.matches ? 'auto' : 'smooth', block: 'start' });
+    return;
+  }
+  const [, m, d] = day.split('-').map(Number);
+  const text = input.value.trim().replace(/\s*\d{1,2}\/\d{1,2}$/, '');
+  input.value = `${text ? `${text} ` : ''}${d}/${m}`;
+  if (!text) input.value += ' ';
+  dropWhen = false;
+  updateHint();
+  input.focus();
+  input.setSelectionRange(input.value.length, input.value.length);
+});
 
 // ---------------------------------------------------------------------------
 // Task dialog
@@ -691,6 +742,7 @@ function syncNote() {
 }
 
 function renderNoteHead() {
+  if (view === 'notes') renderHero();
   $('#note-date').textContent = noteDay === today ? `วันนี้ · ${shortDate(noteDay)}` : longDate(noteDay);
   $('[data-note="today"]').hidden = noteDay === today;
 }
@@ -753,10 +805,12 @@ function renderFocus() {
   const preset = state.prefs.focusMinutes ?? 25;
   const running = f && f.endsAt != null;
 
+  // One UI 7-style Now Bar above the composer while a timer runs (not on the timer page itself).
   const chip = $('#focus-chip');
-  chip.hidden = !f;
+  chip.hidden = !f || view === 'focus';
   chip.classList.toggle('paused', !!f && !running);
-  $('span', chip).textContent = f ? fmt(left) : '';
+  $('.nb-time', chip).textContent = f ? fmt(left) : '';
+  $('.nb-label', chip).textContent = f ? f.label || (running ? 'กำลังโฟกัส' : 'พักไว้') : '';
   chip.setAttribute('aria-label', f ? `โฟกัส เหลือ ${fmt(left)}` : 'โฟกัส');
 
   if (view !== 'focus') return;

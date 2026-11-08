@@ -6,8 +6,8 @@
 <title>แปะไว้</title>
 <meta name="description" content="แปะทุกเรื่องที่ค้างในหัวไว้ก่อน แล้วกลับไปทำงานต่อ เปิดจากขอบจอแท็บเล็ต Samsung เป็นหน้าต่างลอยได้">
 <meta name="color-scheme" content="light dark">
-<meta name="theme-color" content="#f5f4f0" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#0e0e12" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f3f3f5" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/favicon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
@@ -16,27 +16,16 @@
 </head>
 <body>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
-  <defs>
-    <linearGradient id="g-focus" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#ffd43b"/>
-      <stop offset="1" stop-color="#ff7a45"/>
-    </linearGradient>
-    <linearGradient id="g-day" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#8b85ff"/>
-      <stop offset="1" stop-color="#4f46e5"/>
-    </linearGradient>
-  </defs>
   <symbol id="i-check" viewBox="0 0 24 24"><path d="M5.5 12.5l4 4L18.5 7.5" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
   <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
-  <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="2" fill="currentColor"/><circle cx="12" cy="12" r="2" fill="currentColor"/><circle cx="19" cy="12" r="2" fill="currentColor"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><circle cx="12" cy="5" r="2" fill="currentColor"/><circle cx="12" cy="12" r="2" fill="currentColor"/><circle cx="12" cy="19" r="2" fill="currentColor"/></symbol>
   <symbol id="i-cal" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15" rx="3.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M3.5 10h17M8 3v4M16 3v4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
-  <symbol id="i-close" viewBox="0 0 24 24"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></symbol>
-  <symbol id="i-left" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
-  <symbol id="i-right" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
+  <symbol id="i-left" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-right" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
   <symbol id="i-timer" viewBox="0 0 24 24"><circle cx="12" cy="13.5" r="7.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 9.5v4l2.5 2M9.5 2.5h5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
-  <symbol id="i-inbox" viewBox="0 0 24 24"><path d="M3.5 13.5l2.6-7.2A2 2 0 0 1 8 5h8a2 2 0 0 1 1.9 1.3l2.6 7.2V18a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M3.5 13.5H8l1.5 2.5h5l1.5-2.5h4.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></symbol>
-  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M5.3 18.7l1.6-1.6M17.1 6.9l1.6-1.6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
-  <symbol id="i-week" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15" rx="3.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M3.5 10h17M8 3v4M16 3v4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="8.5" cy="14.5" r="1.3" fill="currentColor"/><circle cx="12" cy="14.5" r="1.3" fill="currentColor"/><circle cx="15.5" cy="14.5" r="1.3" fill="currentColor"/></symbol>
+  <symbol id="i-tasks" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="17" height="17" rx="5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M7.5 12.2l3 3 6-6.4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-note" viewBox="0 0 24 24"><path d="M6 3.5h9l3.5 3.5v13.5H6z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M9 11h6M9 15h4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
   <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M12 7.5V12l3 2" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
   <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 14a4.5 4.5 0 0 0 6.4 0l3-3a4.5 4.5 0 0 0-6.4-6.4l-1 1M14 10a4.5 4.5 0 0 0-6.4 0l-3 3a4.5 4.5 0 0 0 6.4 6.4l1-1" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
   <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4.5 7h15M9.5 7V4.8h5V7M6.5 7l.9 12.2A1.8 1.8 0 0 0 9.2 21h5.6a1.8 1.8 0 0 0 1.8-1.8L17.5 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
@@ -46,18 +35,21 @@
   <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3l1.9 5.6L19.5 10.5l-5.6 1.9L12 18l-1.9-5.6L4.5 10.5l5.6-1.9z" fill="currentColor"/></symbol>
 </svg>
 
-<div class="ambient" aria-hidden="true"></div>
+<!-- Tabs: a text-only bottom bar on phones and pop-up windows, a navigation rail on tablets (One UI). -->
+<nav class="tabs" role="tablist" aria-label="หน้า">
+  <img class="rail-logo" src="icons/favicon.svg" alt="" width="40" height="40">
+  <span class="tab-ink" id="tab-ink" aria-hidden="true"></span>
+  <button type="button" role="tab" data-view="tasks" aria-selected="true"><svg aria-hidden="true"><use href="#i-tasks"/></svg><span>งาน</span></button>
+  <button type="button" role="tab" data-view="notes" aria-selected="false"><svg aria-hidden="true"><use href="#i-note"/></svg><span>โน้ต</span></button>
+  <button type="button" role="tab" data-view="focus" aria-selected="false"><svg aria-hidden="true"><use href="#i-timer"/></svg><span>โฟกัส</span></button>
+</nav>
 
-<div class="dock">
-  <header class="top">
-    <div class="brand">
-      <img src="icons/favicon.svg" alt="" width="30" height="30">
-      <strong>แปะไว้</strong>
-      <span id="today-label" class="dim"></span>
-    </div>
-    <button id="focus-chip" class="focus-chip" type="button" hidden>
-      <svg aria-hidden="true"><use href="#i-timer"/></svg><span></span>
-    </button>
+<!-- Extended app bar: a large dynamic title in the viewing area; it condenses as the page scrolls. -->
+<header class="appbar" id="appbar">
+  <div class="bar">
+    <img class="bar-logo" src="icons/favicon.svg" alt="" width="28" height="28">
+    <strong class="bar-title" id="bar-title">งาน</strong>
+    <span id="today-label" class="bar-date"></span>
     <button id="open-full" class="icon-btn panel-only" type="button" aria-label="เปิดแอปเต็ม">
       <svg aria-hidden="true"><use href="#i-expand"/></svg>
     </button>
@@ -67,53 +59,22 @@
     <button id="menu-btn" class="icon-btn" type="button" aria-label="เมนูและวิธีใช้">
       <svg aria-hidden="true"><use href="#i-more"/></svg>
     </button>
-  </header>
-
-  <form id="capture" class="capture" autocomplete="off">
-    <div class="capture-row">
-      <input id="capture-input" name="text" maxlength="2000" enterkeyhint="done" autocomplete="off"
-             placeholder="มีอะไรค้างในหัว แปะไว้ตรงนี้…" aria-label="เรื่องที่จะแปะไว้" aria-describedby="capture-hint">
-      <button id="mic-btn" class="icon-btn mic" type="button" aria-label="พูดแทนพิมพ์" hidden>
-        <svg aria-hidden="true"><use href="#i-mic"/></svg>
-      </button>
-      <button class="send" type="submit" aria-label="แปะ">
-        <span>แปะ</span><svg aria-hidden="true"><use href="#i-send"/></svg>
-      </button>
-    </div>
-    <div id="capture-hint" class="capture-hint" aria-live="polite"></div>
-  </form>
-
-  <nav class="tabs" role="tablist" aria-label="หน้า">
-    <span class="tab-ink" id="tab-ink" aria-hidden="true"></span>
-    <button type="button" role="tab" data-view="tasks" aria-selected="true">งาน</button>
-    <button type="button" role="tab" data-view="notes" aria-selected="false">โน้ต</button>
-    <button type="button" role="tab" data-view="focus" aria-selected="false">โฟกัส</button>
-  </nav>
-</div>
+  </div>
+  <div class="hero" id="hero" aria-live="polite">
+    <p class="hero-greet" id="hero-greet"></p>
+    <h1 id="hero-title"></h1>
+    <p class="hero-sub" id="hero-sub"></p>
+  </div>
+</header>
 
 <main>
   <section id="view-tasks" class="view" role="tabpanel" aria-label="งาน">
-    <section class="hero" id="hero" aria-live="polite">
-      <div class="hero-text">
-        <p class="hero-greet" id="hero-greet"></p>
-        <h1 id="hero-title"></h1>
-        <p class="hero-sub" id="hero-sub"></p>
-      </div>
-      <div class="hero-ring" aria-hidden="true">
-        <svg viewBox="0 0 64 64">
-          <circle class="hr-track" cx="32" cy="32" r="27"/>
-          <circle class="hr-bar" cx="32" cy="32" r="27"/>
-        </svg>
-        <span id="hero-count"></span>
-      </div>
-    </section>
-
     <div id="setup-banner" class="banner" hidden>
       <svg class="banner-icon" aria-hidden="true"><use href="#i-spark"/></svg>
       <span class="web-only">ให้ <strong>แปะไว้</strong> อยู่ติดขอบจอ เรียกขึ้นมาเป็นหน้าต่างลอยได้จากทุกแอป</span>
       <span class="android-only">เปิดแถบที่ notch แล้วแตะแถบรอบกล้องเพื่อแปะได้จากทุกแอป</span>
       <span class="banner-actions">
-        <button type="button" class="banner-go" data-action="guide">ดูวิธี</button>
+        <button type="button" class="text-btn" data-action="guide">ดูวิธี</button>
         <button type="button" class="icon-btn small" data-action="dismiss-banner" aria-label="ปิด"><svg aria-hidden="true"><use href="#i-close"/></svg></button>
       </span>
     </div>
@@ -121,36 +82,32 @@
     <div class="board" id="board">
       <section class="col" id="col-inbox" aria-labelledby="h-inbox">
         <header class="col-head">
-          <span class="col-icon ci-inbox"><svg aria-hidden="true"><use href="#i-inbox"/></svg></span>
           <h2 id="h-inbox">กล่องรับ</h2>
           <span class="count"></span>
         </header>
-        <p class="col-sub">เรื่องที่ยังไม่มีวัน ว่างแล้วค่อยจัด</p>
         <ul class="list"></ul>
-        <p class="empty"><span class="empty-art"><svg aria-hidden="true"><use href="#i-inbox"/></svg></span>ยังไม่มีอะไรค้าง หัวโล่ง</p>
+        <p class="empty">ยังไม่มีอะไรค้าง หัวโล่ง</p>
       </section>
       <section class="col" id="col-today" aria-labelledby="h-today">
         <header class="col-head">
-          <span class="col-icon ci-today"><svg aria-hidden="true"><use href="#i-sun"/></svg></span>
           <h2 id="h-today">วันนี้</h2>
           <span class="count"></span>
+          <span class="col-sub" id="today-sub"></span>
         </header>
-        <p class="col-sub" id="today-sub"></p>
         <button type="button" class="carry" data-action="carry" hidden></button>
         <ul class="list"></ul>
-        <p class="empty"><span class="empty-art"><svg aria-hidden="true"><use href="#i-sun"/></svg></span>วันนี้ยังว่าง ลองพิมพ์ “บ่ายสอง ประชุม”</p>
+        <p class="empty">วันนี้ยังว่าง ลองพิมพ์ “บ่ายสอง ประชุม”</p>
       </section>
       <section class="col" id="col-ahead" aria-labelledby="h-ahead">
         <header class="col-head">
-          <span class="col-icon ci-ahead"><svg aria-hidden="true"><use href="#i-week"/></svg></span>
           <h2 id="h-ahead">ข้างหน้า</h2>
           <span class="count"></span>
         </header>
-        <p class="col-sub">6 วันถัดไป</p>
+        <div class="week" id="week" role="list" aria-label="7 วันข้างหน้า"></div>
         <div class="ahead"></div>
       </section>
     </div>
-    <p class="swipe-tip dim small" id="swipe-tip" hidden>ปัดขวา = เสร็จ · ปัดซ้าย = เลื่อนไปวันถัดไป</p>
+    <p class="swipe-tip" id="swipe-tip" hidden>ปัดขวา = เสร็จ · ปัดซ้าย = เลื่อนไปวันถัดไป</p>
   </section>
 
   <section id="view-notes" class="view" role="tabpanel" aria-label="โน้ต" hidden>
@@ -158,7 +115,7 @@
       <button type="button" class="icon-btn" data-note="-1" aria-label="วันก่อน"><svg aria-hidden="true"><use href="#i-left"/></svg></button>
       <div class="notes-title">
         <h2 id="note-date"></h2>
-        <button type="button" class="link" data-note="today" hidden>กลับมาวันนี้</button>
+        <button type="button" class="text-btn" data-note="today" hidden>กลับมาวันนี้</button>
       </div>
       <button type="button" class="icon-btn" data-note="1" aria-label="วันถัดไป"><svg aria-hidden="true"><use href="#i-right"/></svg></button>
     </div>
@@ -166,7 +123,7 @@
       <textarea id="note" aria-label="โน้ตของวันนี้" placeholder="เทความคิดลงตรงนี้ได้ยาว ๆ บันทึกให้เอง&#10;บรรทัดไหนเป็นงาน วางเคอร์เซอร์ไว้แล้วกด “บรรทัดนี้ → งาน”"></textarea>
     </div>
     <div class="notes-actions">
-      <button type="button" id="line-to-task" class="pill-btn"><span>บรรทัดนี้</span><svg aria-hidden="true"><use href="#i-arrow"/></svg><span>งาน</span></button>
+      <button type="button" id="line-to-task" class="text-btn">บรรทัดนี้ → งาน</button>
       <span class="dim kbd-hint">หรือ <kbd>Ctrl</kbd> + <kbd>Enter</kbd></span>
     </div>
   </section>
@@ -195,64 +152,74 @@
   </section>
 </main>
 
+<!-- Interaction area: the Now Bar and the composer sit at the bottom, within reach. -->
+<div class="dock" id="dock">
+  <button id="focus-chip" class="now-bar" type="button" hidden>
+    <span class="nb-icon"><svg aria-hidden="true"><use href="#i-timer"/></svg></span>
+    <span class="nb-time"></span>
+    <span class="nb-label"></span>
+  </button>
+  <form id="capture" class="capture" autocomplete="off">
+    <div id="capture-hint" class="capture-hint" aria-live="polite"></div>
+    <div class="capture-row">
+      <input id="capture-input" name="text" maxlength="2000" enterkeyhint="done" autocomplete="off"
+             placeholder="มีอะไรค้างในหัว แปะไว้ตรงนี้…" aria-label="เรื่องที่จะแปะไว้" aria-describedby="capture-hint">
+      <button id="mic-btn" class="icon-btn mic" type="button" aria-label="พูดแทนพิมพ์" hidden>
+        <svg aria-hidden="true"><use href="#i-mic"/></svg>
+      </button>
+      <button class="send" type="submit" aria-label="แปะ">
+        <svg aria-hidden="true"><use href="#i-send"/></svg>
+      </button>
+    </div>
+  </form>
+</div>
+
 <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
 <dialog id="task-dialog" aria-labelledby="task-dialog-title">
   <form id="task-form" method="dialog">
-    <div class="grabber" aria-hidden="true"></div>
-    <div class="sheet-head">
-      <h2 id="task-dialog-title">แก้ไขเรื่องนี้</h2>
-      <button type="button" class="icon-btn small" data-act="cancel" aria-label="ปิด"><svg aria-hidden="true"><use href="#i-close"/></svg></button>
-    </div>
+    <h2 id="task-dialog-title">แก้ไขเรื่องนี้</h2>
     <textarea name="text" rows="2" maxlength="2000" aria-label="ข้อความ"></textarea>
-    <p class="field-label">เมื่อไร</p>
     <div class="quick" role="group" aria-label="ย้ายไป">
       <button type="button" data-move="inbox">กล่องรับ</button>
       <button type="button" data-move="today">วันนี้</button>
       <button type="button" data-move="tomorrow">พรุ่งนี้</button>
       <button type="button" data-move="next-week">สัปดาห์หน้า</button>
     </div>
-    <div class="when">
-      <label><svg aria-hidden="true"><use href="#i-cal"/></svg><input type="date" name="day" aria-label="วัน"></label>
-      <label><svg aria-hidden="true"><use href="#i-clock"/></svg><input type="time" name="time" aria-label="เวลา"></label>
+    <div class="group when">
+      <label><span>วัน</span><input type="date" name="day" aria-label="วัน"></label>
+      <label><span>เวลา</span><input type="time" name="time" aria-label="เวลา"></label>
     </div>
-    <div class="tools">
-      <button type="button" data-act="link" hidden><svg aria-hidden="true"><use href="#i-link"/></svg>เปิดลิงก์</button>
-      <button type="button" data-act="calendar"><svg aria-hidden="true"><use href="#i-cal"/></svg>ลงปฏิทิน</button>
-      <button type="button" data-act="focus"><svg aria-hidden="true"><use href="#i-timer"/></svg>โฟกัส 25 นาที</button>
-      <button type="button" data-act="delete" class="danger"><svg aria-hidden="true"><use href="#i-trash"/></svg>ลบ</button>
+    <div class="group tools">
+      <button type="button" data-act="link" hidden><svg aria-hidden="true"><use href="#i-link"/></svg><span>เปิดลิงก์</span></button>
+      <button type="button" data-act="calendar"><svg aria-hidden="true"><use href="#i-cal"/></svg><span>ลงปฏิทิน</span></button>
+      <button type="button" data-act="focus"><svg aria-hidden="true"><use href="#i-timer"/></svg><span>โฟกัสเรื่องนี้ 25 นาที</span></button>
+      <button type="button" data-act="delete" class="danger"><svg aria-hidden="true"><use href="#i-trash"/></svg><span>ลบ</span></button>
     </div>
     <div class="dialog-actions">
-      <button type="submit" class="primary wide" data-act="save">บันทึก</button>
+      <button type="button" data-act="cancel">ยกเลิก</button>
+      <button type="submit" data-act="save">บันทึก</button>
     </div>
   </form>
 </dialog>
 
-<dialog id="menu-dialog" aria-labelledby="menu-title">
-  <div class="sheet">
-    <div class="grabber" aria-hidden="true"></div>
-    <div class="sheet-head">
-      <h2 id="menu-title">แปะไว้</h2>
-      <button type="button" class="icon-btn small" data-close aria-label="ปิด"><svg aria-hidden="true"><use href="#i-close"/></svg></button>
-    </div>
-    <div class="menu-list">
-      <button type="button" data-menu="guide" class="web-only">วิธีวางไว้ขอบจอ Samsung</button>
-      <button type="button" data-menu="guide" class="android-only">ตั้งค่าแถบที่ notch</button>
-      <button type="button" data-menu="install" hidden>ติดตั้งเป็นแอป</button>
-      <button type="button" data-menu="notify" hidden>เปิดการแจ้งเตือนเมื่อถึงเวลา</button>
-      <button type="button" data-menu="copy">คัดลอกเรื่องที่ค้างทั้งหมดเป็นข้อความ</button>
-      <button type="button" data-menu="clear-done">ล้างเรื่องที่เสร็จไปแล้ว (ก่อนวันนี้)</button>
-      <button type="button" data-menu="export">สำรองข้อมูลเป็นไฟล์</button>
-      <button type="button" data-menu="import">กู้คืนจากไฟล์สำรอง</button>
-    </div>
-    <p class="dim small">ข้อมูลทั้งหมดเก็บในเครื่องนี้เท่านั้น ไม่ส่งไปที่ไหน · <span id="version"></span></p>
-    <input type="file" id="import-file" accept="application/json,.json" hidden>
+<dialog id="menu-dialog" class="popover" aria-label="เมนู">
+  <div class="menu-list">
+    <button type="button" data-menu="guide" class="web-only">วิธีวางไว้ขอบจอ Samsung</button>
+    <button type="button" data-menu="guide" class="android-only">ตั้งค่าแถบที่ notch</button>
+    <button type="button" data-menu="install" hidden>ติดตั้งเป็นแอป</button>
+    <button type="button" data-menu="notify" hidden>เปิดการแจ้งเตือนเมื่อถึงเวลา</button>
+    <button type="button" data-menu="copy">คัดลอกเรื่องที่ค้าง</button>
+    <button type="button" data-menu="clear-done">ล้างเรื่องที่เสร็จแล้ว</button>
+    <button type="button" data-menu="export">สำรองข้อมูล</button>
+    <button type="button" data-menu="import">กู้คืนข้อมูล</button>
   </div>
+  <p class="menu-foot">เก็บในเครื่องนี้เท่านั้น · <span id="version"></span></p>
+  <input type="file" id="import-file" accept="application/json,.json" hidden>
 </dialog>
 
 <dialog id="guide-dialog" aria-labelledby="guide-title">
   <div class="sheet guide">
-    <div class="grabber" aria-hidden="true"></div>
     <div class="sheet-head">
       <h2 id="guide-title"><span class="web-only">ให้แปะไว้อยู่ติดขอบจอ Samsung</span><span class="android-only">แถบแปะไว้ที่ notch</span></h2>
       <button type="button" class="icon-btn small" data-close aria-label="ปิด"><svg aria-hidden="true"><use href="#i-close"/></svg></button>
@@ -276,8 +243,10 @@
             · กดค้างที่แถบ = เปิดแอปเต็ม · ตัวเลขบนแถบ = เรื่องที่ต้องทำวันนี้ ตอนโฟกัสจะเป็นเวลาที่เหลือ · ถึงเวลาเตือน แถบจะขยายบอก</span>
         </li>
       </ol>
-      <label class="switch"><input type="checkbox" data-android-pref="pill"><span>แสดงแถบที่ notch</span></label>
-      <label class="switch"><input type="checkbox" data-android-pref="hideFullscreen"><span>ซ่อนแถบตอนดูวิดีโอหรือเล่นเกมเต็มจอ</span></label>
+      <div class="group">
+        <label class="switch"><span>แสดงแถบที่ notch</span><input type="checkbox" data-android-pref="pill"></label>
+        <label class="switch"><span>ซ่อนแถบตอนดูวิดีโอหรือเล่นเกมเต็มจอ</span><input type="checkbox" data-android-pref="hideFullscreen"></label>
+      </div>
       <p class="dim small">ใช้สิทธิ์การช่วยเหลือการเข้าถึงเพียงเพื่อวางแถบทับแถบสถานะได้ แปะไว้ไม่อ่าน ไม่เก็บ และไม่ส่งสิ่งที่อยู่บนจอไปที่ไหน</p>
     </div>
     <div class="web-only">
@@ -324,7 +293,9 @@
       · ปัดเรื่องไปทางขวา = เสร็จ · ปัดไปทางซ้าย = เลื่อนไปวันถัดไป</p>
     <h3>คีย์บอร์ด (Book Cover Keyboard)</h3>
     <p class="dim small"><kbd>/</kbd> หรือ <kbd>Ctrl</kbd>+<kbd>K</kbd> ไปช่องแปะ · <kbd>Enter</kbd> แปะ · <kbd>Esc</kbd> ล้างช่อง · <kbd>Ctrl</kbd>+<kbd>1</kbd>/<kbd>2</kbd>/<kbd>3</kbd> สลับหน้า</p>
-    <button type="button" class="primary wide" data-close data-action="guide-done">เข้าใจแล้ว</button>
+    <div class="dialog-actions">
+      <button type="button" data-close data-action="guide-done">เข้าใจแล้ว</button>
+    </div>
   </div>
 </dialog>
 </body>
