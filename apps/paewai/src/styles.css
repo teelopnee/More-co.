@@ -564,8 +564,8 @@ main {
 
 /* Typing on a phone-sized window: hide the tabs so the composer sits right on the keyboard. */
 @media (max-width: 599px) {
-  body:has(#capture-input:focus) .tabs { transform: translateY(110%); }
-  body:has(#capture-input:focus) .dock { bottom: env(safe-area-inset-bottom); }
+  body.kb .tabs { transform: translateY(110%); }
+  body.kb .dock { bottom: env(safe-area-inset-bottom); }
   .tabs, .dock { transition: transform .3s var(--ease), bottom .3s var(--ease); }
 }
 
@@ -807,4 +807,165 @@ html.panel .toast { bottom: 16px; }
     animation-delay: 0s !important;
     transition-duration: .01ms !important;
   }
+}
+
+/* ---------- smart sorting: the kind chip under the composer ---------- */
+
+.kind-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  height: 34px;
+  padding: 0 14px 0 10px;
+  border: 0;
+  border-radius: 17px;
+  font-size: 14px;
+  font-weight: 800;
+  animation: chip-in .3s var(--ease);
+}
+.kind-chip svg { width: 17px; height: 17px; }
+.kind-chip::after { content: "▾"; margin-left: 2px; font-size: 11px; opacity: .6; }
+.k-task { background: var(--tint); color: var(--primary-text); }
+.k-remind { background: var(--tint); color: var(--primary-text); }
+.k-note { background: color-mix(in srgb, var(--note) 32%, var(--card)); color: #6b4e00; }
+.k-shop { background: color-mix(in srgb, #2fbf71 18%, var(--card)); color: #13804a; }
+.k-money { background: color-mix(in srgb, var(--later) 22%, var(--card)); color: #a35a00; }
+@media (prefers-color-scheme: dark) {
+  .k-note { color: #ffd76a; }
+  .k-shop { color: #5be29a; }
+  .k-money { color: #ffc069; }
+}
+.badge.rep { color: var(--dim); }
+.text-btn.small { min-height: 32px; margin-left: auto; padding: 0 10px; font-size: 14px; }
+
+/* ---------- shopping list ---------- */
+
+.shop-block { margin-top: 28px; }
+.shop-list + .shop-list { margin-top: 12px; }
+.shop-cat { padding: 14px 20px 4px; color: var(--dim); font-size: 13px; font-weight: 700; list-style: none; }
+.shop-cat:first-child { padding-top: 12px; }
+.shop-item .body { min-height: 52px; }
+.shop-list.bought { opacity: .75; }
+
+/* ---------- notes: search, quick-note cards, journal ---------- */
+
+.search {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 52px;
+  margin-bottom: 22px;
+  padding: 0 18px;
+  border-radius: 26px;
+  background: var(--card);
+  color: var(--dim);
+}
+.search input { flex: 1; min-width: 0; height: 100%; border: 0; background: transparent; color: var(--ink); font-size: 17px; outline: none; }
+.search:focus-within { box-shadow: 0 0 0 2px var(--control); }
+.search-results h3, .money-days h3 { display: flex; align-items: baseline; gap: 8px; margin: 18px 8px 8px; }
+.search-results h3:first-child { margin-top: 0; }
+.notes-main { display: flex; flex-direction: column; gap: 12px; }
+.notes-main > .col-head { padding-bottom: 0; }
+.journal-head { margin-top: 16px; }
+.memos { columns: 2 200px; column-gap: 12px; }
+.memo {
+  position: relative;
+  display: grid;
+  gap: 8px;
+  width: 100%;
+  margin: 0 0 12px;
+  padding: 16px 18px 14px;
+  border: 0;
+  border-radius: 22px;
+  background: var(--card);
+  text-align: left;
+  break-inside: avoid;
+}
+.memo:active { transform: scale(.98); }
+.memo.pinned { box-shadow: inset 0 3px 0 var(--note); }
+.memo-pin { position: absolute; top: 12px; right: 12px; color: #d9a400; }
+.memo-pin svg { width: 16px; height: 16px; }
+.memo-text {
+  overflow: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 9;
+  -webkit-box-orient: vertical;
+  line-height: 1.45;
+}
+.memo.pinned .memo-text { padding-right: 18px; }
+.memo-meta { display: flex; align-items: center; gap: 4px; color: var(--faint); font-size: 12.5px; }
+.memo-meta svg { width: 13px; height: 13px; }
+
+/* rows inside a grouped block that are not tasks */
+.plain-row { position: relative; list-style: none; }
+.plain-row + .plain-row::before { content: ""; position: absolute; top: 0; left: 20px; right: 20px; height: 1px; background: var(--line); }
+.row-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  min-height: 58px;
+  padding: 10px 20px;
+  border: 0;
+  background: none;
+  text-align: left;
+}
+.row-btn:active { transform: none; background: var(--sunk); }
+.row-btn > span { display: grid; min-width: 0; }
+.row-btn strong { flex: none; font-variant-numeric: tabular-nums; }
+.row-btn small, .row-btn > span > span:not(:first-child) { color: var(--dim); font-size: 13px; }
+.mi span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------- money ---------- */
+
+.money-overview { display: grid; gap: 14px; margin-bottom: 8px; }
+.stats-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.stat { display: grid; gap: 2px; padding: 14px 16px; border-radius: 22px; background: var(--card); }
+.stat span { color: var(--dim); font-size: 13px; }
+.stat strong { font-size: clamp(18px, 4.6vw, 24px); font-weight: 800; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.stat:first-child strong { color: var(--primary-text); }
+.bars {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 6px;
+  height: 176px;
+  padding: 14px 12px 10px;
+  border-radius: var(--radius);
+  background: var(--card);
+}
+.mbar { display: grid; grid-template-rows: auto 1fr auto; justify-items: center; gap: 6px; min-width: 0; }
+.mbar-v { color: var(--dim); font-size: 11.5px; font-variant-numeric: tabular-nums; min-height: 15px; }
+.mbar-track { position: relative; width: min(28px, 100%); height: 100%; }
+.mbar-track i { position: absolute; left: 0; right: 0; bottom: 0; height: max(var(--h), 4px); border-radius: 9px; background: var(--line); transition: height .6s var(--ease); }
+.mbar.is-today .mbar-track i { background: var(--control); }
+.mbar.is-today .mbar-v, .mbar.is-today .mbar-d { color: var(--primary-text); font-weight: 800; }
+.mbar-d { color: var(--dim); font-size: 12px; }
+.cats { display: grid; gap: 0; border-radius: var(--radius); background: var(--card); padding: 6px 0; }
+.cat-row { display: grid; grid-template-columns: minmax(84px, 1fr) 2fr auto; align-items: center; gap: 14px; min-height: 46px; padding: 0 20px; font-size: 15px; }
+.cat-row strong { font-variant-numeric: tabular-nums; }
+.cat-bar { position: relative; height: 8px; border-radius: 4px; background: var(--sunk); overflow: hidden; }
+.cat-bar i { position: absolute; inset: 0 auto 0 0; width: var(--w); border-radius: 4px; background: var(--control); transition: width .6s var(--ease); }
+.money-days .day h3 .dn2 { margin-left: auto; color: var(--ink); font-weight: 800; }
+
+.when select {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--primary-text);
+  font-weight: 700;
+  font-size: 16px;
+  text-align: right;
+  outline: none;
+}
+
+@media (min-width: 840px) and (min-height: 560px) {
+  #view-notes:not([hidden]), #view-money:not([hidden]) { width: min(100%, 980px); margin: 0 auto; }
+  .memos { columns: 3 220px; }
+  #view-money:not([hidden]) { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); align-content: start; gap: 24px; }
+  #view-money .empty { grid-column: 1 / -1; }
+  .money-days .day:first-child h3 { margin-top: 0; }
 }

@@ -292,6 +292,84 @@ const DAY_RULES = [
   },
 ];
 
+// ---------------------------------------------------------------------------
+// Repeats ("ทุกวัน 8 โมง กินยา", "ทุกวันที่ 25 จ่ายบัตร"), stored as
+// 'daily' | 'weekdays' | 'weekly:<0-6>' | 'monthly:<1-31>' | 'yearly'.
+
+const WD_NO_SUN = 'จันทร์|อังคาร|พุธ|พฤหัสบดี|พฤหัส|ศุกร์|เสาร์';
+const REPEAT_RULES = [
+  {
+    re: /ทุก\s*วัน(?:ทำงาน|ธรรมดา)|(?:ทุก\s*)?(?:วัน)?จันทร์\s*(?:-|–|ถึง)\s*(?:วัน)?ศุกร์|\bevery weekday\b|\bweekdays\b/giu,
+    fn: () => 'weekdays',
+  },
+  // "ทุกอาทิตย์" means every week; every Sunday is "ทุกวันอาทิตย์"
+  {
+    re: new RegExp(`ทุก\\s*(?:(?:วัน)?(${WD_NO_SUN})|วัน(อาทิตย์))`, 'gu'),
+    fn: (m) => `weekly:${WEEKDAYS[m[1] ?? m[2]]}`,
+  },
+  {
+    re: /ทุก\s*(?:เดือน\s*)?วันที่\s*(\d{1,2})/gu,
+    fn: (m) => (+m[1] >= 1 && +m[1] <= 31 ? `monthly:${+m[1]}` : null),
+  },
+  { re: /ทุก\s*วัน(?!ที่)|\bevery ?day\b|\bdaily\b/giu, fn: () => 'daily' },
+  { re: /ทุก\s*(?:สัปดาห์|อาทิตย์)|\bevery week\b|\bweekly\b/giu, fn: () => 'weekly:*' },
+  { re: /ทุก\s*เดือน|\bevery month\b|\bmonthly\b/giu, fn: () => 'monthly:*' },
+  { re: /ทุก\s*ปี|\bevery year\b|\byearly\b|\bannually\b/giu, fn: () => 'yearly' },
+];
+
+const daysIn = (y, m) => new Date(y, m + 1, 0).getDate();
+
+/** Does `day` fall on the repeat? (yearly: every day qualifies; it is anchored by the task's own date.) */
+function repeatMatches(repeat, day) {
+  const [kind, arg] = repeat.split(':');
+  const d = fromKey(day);
+  if (kind === 'weekdays') return d.getDay() >= 1 && d.getDay() <= 5;
+  if (kind === 'weekly') return d.getDay() === Number(arg);
+  if (kind === 'monthly') return d.getDate() === Math.min(Number(arg), daysIn(d.getFullYear(), d.getMonth()));
+  return true;
+}
+
+/** The next day after `day` on which the repeat falls. */
+export function nextOccurrence(repeat, day) {
+  const [kind, arg] = repeat.split(':');
+  if (kind === 'yearly') {
+    const d = fromKey(day);
+    const y = d.getFullYear() + 1;
+    return dayKey(new Date(y, d.getMonth(), Math.min(d.getDate(), daysIn(y, d.getMonth()))));
+  }
+  if (kind === 'monthly') {
+    const d = fromKey(day);
+    for (let i = 0; i < 3; i++) {
+      const y = d.getFullYear() + Math.floor((d.getMonth() + i) / 12);
+      const m = (d.getMonth() + i) % 12;
+      const key = dayKey(new Date(y, m, Math.min(Number(arg), daysIn(y, m))));
+      if (key > day) return key;
+    }
+  }
+  let next = addDays(day, 1);
+  for (let i = 0; i < 8 && !repeatMatches(repeat, next); i++) next = addDays(next, 1);
+  return next;
+}
+
+/** First day on or after today (today only if its time has not passed). */
+function firstOccurrence(repeat, today, time, nowDate) {
+  if (repeatMatches(repeat, today) && (!time || time >= timeOf(nowDate))) return today;
+  return nextOccurrence(repeat, today);
+}
+
+export function repeatLabel(repeat) {
+  if (!repeat) return '';
+  const [kind, arg] = repeat.split(':');
+  if (kind === 'daily') return 'ทุกวัน';
+  if (kind === 'weekdays') return 'ทุกวันทำงาน';
+  if (kind === 'weekly') return `ทุกวัน${DAYS_LONG[Number(arg)]}`;
+  if (kind === 'monthly') return `ทุกวันที่ ${arg}`;
+  if (kind === 'yearly') return 'ทุกปี';
+  return '';
+}
+
+export const isRepeat = (v) => typeof v === 'string' && /^(daily|weekdays|weekly:[0-6]|monthly:([1-9]|[12]\d|3[01])|yearly)$/.test(v);
+
 function candidates(rules, s, ctx) {
   const out = [];
   for (const rule of rules) {
@@ -311,9 +389,12 @@ const overlaps = (a, b) => a.start < b.end && b.start < a.end;
  */
 export function parseWhen(input, now = Date.now()) {
   const text = String(input ?? '');
-  const s = normalizeDigits(text);
+  let s = normalizeDigits(text);
   const nowDate = new Date(now);
   const ctx = { now, today: dayKey(nowDate), year: nowDate.getFullYear(), am: false, pm: false };
+
+  const repeatHit = candidates(REPEAT_RULES, s, ctx)[0] ?? null;
+  if (repeatHit) s = s.slice(0, repeatHit.start) + ' '.repeat(repeatHit.end - repeatHit.start) + s.slice(repeatHit.end);
 
   const dayHit = candidates(DAY_RULES, s, ctx)[0] ?? null;
   const partMatch = dayHit?.value.part ? null : s.match(/(?<!ขั้น|ช่วง)ตอน\s*(เช้า|สาย|บ่าย|เย็น|ค่ำ|กลางคืน)(?!นี้)/u);
@@ -330,12 +411,17 @@ export function parseWhen(input, now = Date.now()) {
     timeHit = candidates(TIME_RULES, s, ctx).find((c) => !dayHit || !overlaps(c, dayHit)) ?? null;
     time = timeHit?.value ?? null;
   }
-  if (!day && !time) return { text: text.trim(), day: null, time: null, matched: [] };
+  let repeat = repeatHit?.value ?? null;
+  if (!day && !time && !repeat) return { text: text.trim(), day: null, time: null, repeat: null, matched: [] };
+  // "ทุกสัปดาห์" / "ทุกเดือน" without a day start today (or tomorrow if the time has passed).
+  if (repeat && !day) day = firstOccurrence(repeat.endsWith(':*') ? 'daily' : repeat, ctx.today, time, nowDate);
   if (time && !day) day = time >= timeOf(nowDate) ? ctx.today : addDays(ctx.today, 1);
+  if (repeat === 'weekly:*') repeat = `weekly:${fromKey(day).getDay()}`;
+  if (repeat === 'monthly:*') repeat = `monthly:${fromKey(day).getDate()}`;
 
   // Cut the matched phrases (and a leading "ตอน"/"เวลา"/"at") out of the text.
   const partHit = partMatch && timeHit ? { start: partMatch.index, end: partMatch.index + partMatch[0].length } : null;
-  const spans = [dayHit, timeHit, partHit]
+  const spans = [repeatHit, dayHit, timeHit, partHit]
     .filter(Boolean)
     .map((c) => {
       const before = s.slice(0, c.start).match(/(?:(?<!ขั้น|ช่วง)ตอน|(?<!ช่วง)เวลา|\b(?:at|on))\s*$/iu);
@@ -359,6 +445,7 @@ export function parseWhen(input, now = Date.now()) {
     text: rest || text.trim(),
     day,
     time,
-    matched: [dayHit, timeHit].filter(Boolean).map((c) => text.slice(c.start, c.end).trim()),
+    repeat,
+    matched: [repeatHit, dayHit, timeHit].filter(Boolean).map((c) => text.slice(c.start, c.end).trim()),
   };
 }

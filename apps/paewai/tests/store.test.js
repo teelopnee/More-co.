@@ -149,3 +149,86 @@ test('exportText lists unfinished tasks', () => {
   assert.match(text, /^กล่องรับ\n☐ ซื้อนม/);
   assert.match(text, /☐ โทรหาแม่ \(2026-11-09 17:00\)/);
 });
+
+test('repeating reminders move on instead of finishing', () => {
+  let s = S.addTask(S.emptyState(), { text: 'กินยา', day: TODAY, time: '20:00', repeat: 'daily' }, T(9));
+  const id = s.tasks[0].id;
+  s = S.toggleDone(s, id, T(20, 5));
+  let t = s.tasks[0];
+  assert.deepEqual([t.done, t.day, t.time, t.streak], [false, '2026-11-09', '20:00', 1]);
+  // overdue by a few days: the next time is not in the past
+  s = S.editTask(s, id, { day: '2026-11-01', time: '20:00' });
+  s = S.toggleDone(s, id, T(9));
+  assert.ok(s.tasks[0].day >= TODAY);
+  // clearing the day drops the repeat
+  s = S.editTask(s, id, { day: null });
+  assert.equal(s.tasks[0].repeat, null);
+  assert.equal(S.addTask(S.emptyState(), { text: 'x', repeat: 'daily' }).tasks[0].repeat, null);
+});
+
+test('shopping list groups by section and clears what was bought', () => {
+  let s = S.addShop(S.emptyState(), [{ text: 'นม' }, 'กล้วย', 'น้ำยาล้างจาน', ' '], T(9));
+  assert.equal(s.shop.length, 3);
+  const g = S.shopGroups(s);
+  assert.deepEqual(g.groups.map((x) => x.cat), ['ผัก ผลไม้', 'นม ไข่ เบเกอรี่', 'ของใช้ในบ้าน']);
+  s = S.toggleShop(s, s.shop[0].id, T(10));
+  assert.equal(S.shopGroups(s).bought.length, 1);
+  s = S.clearBought(s);
+  assert.deepEqual(s.shop.map((i) => i.text), ['กล้วย', 'น้ำยาล้างจาน']);
+});
+
+test('money: totals for today, the week and by category', () => {
+  let s = S.emptyState();
+  s = S.addMoney(s, { text: 'ข้าว', amount: 50, cat: 'อาหาร' }, T(9));
+  s = S.addMoney(s, { text: 'กาแฟ', amount: 65.5, cat: 'อาหาร' }, T(10));
+  s = S.addMoney(s, { text: 'น้ำมัน', amount: 1200, cat: 'เดินทาง' }, T(9, 0, 6));
+  s = S.addMoney(s, { text: 'ศูนย์', amount: 0 }, T(9));
+  const m = S.moneySummary(s, TODAY);
+  assert.equal(m.today, 115.5);
+  assert.equal(m.weekTotal, 1315.5);
+  assert.equal(m.week.length, 7);
+  assert.equal(m.week.at(-1).total, 115.5);
+  assert.deepEqual(m.byCat.map((c) => c.cat), ['เดินทาง', 'อาหาร']);
+  assert.deepEqual(m.days.map((d) => d.day), ['2026-11-08', '2026-11-06']);
+  s = S.editMoney(s, s.money[0].id, { amount: 60, cat: 'ไม่มี' });
+  assert.deepEqual([s.money[0].amount, s.money[0].cat], [60, 'อาหาร']);
+  s = S.deleteMoney(s, s.money[0].id);
+  assert.equal(s.money.length, 2);
+});
+
+test('quick notes: pinned first, edit, delete', () => {
+  let s = S.addMemo(S.emptyState(), 'รหัส wifi abc', T(9));
+  s = S.addMemo(s, 'ไอเดียคลิป', T(10));
+  assert.deepEqual(S.sortedMemos(s).map((m) => m.text), ['ไอเดียคลิป', 'รหัส wifi abc']);
+  s = S.pinMemo(s, s.memos.find((m) => m.text.startsWith('รหัส')).id);
+  assert.deepEqual(S.sortedMemos(s).map((m) => m.text), ['รหัส wifi abc', 'ไอเดียคลิป']);
+  s = S.editMemo(s, s.memos[0].id, '  ');
+  assert.equal(s.memos.length, 1);
+});
+
+test('search across everything', () => {
+  let s = seed();
+  s = S.addMemo(s, 'ประชุมใหญ่ปีหน้า: จองห้องก่อน', T(9));
+  s = S.setNote(s, TODAY, 'บรรทัดแรก\nคิดเรื่องประชุม');
+  s = S.addMoney(s, { text: 'กาแฟก่อนประชุม', amount: 60, cat: 'อาหาร' }, T(9));
+  const r = S.search(s, 'ประชุม');
+  assert.deepEqual(r.tasks.map((t) => t.text), ['ประชุม']);
+  assert.equal(r.memos.length, 1);
+  assert.deepEqual(r.notes, [{ day: TODAY, line: 'คิดเรื่องประชุม' }]);
+  assert.equal(r.money.length, 1);
+  assert.deepEqual(S.search(s, '  ').tasks, []);
+});
+
+test('sanitize keeps the new collections and drops junk', () => {
+  const s = S.sanitize({
+    tasks: [{ id: 'r', text: 'x', day: '2026-11-08', repeat: 'weekly:9' }],
+    memos: [{ text: 'm' }, { text: '' }],
+    shop: [{ text: 'นม', cat: 'ไม่มี' }],
+    money: [{ text: 'a', amount: 10, cat: 'อาหาร' }, { amount: -5 }],
+  });
+  assert.equal(s.tasks[0].repeat, null);
+  assert.equal(s.memos.length, 1);
+  assert.equal(s.shop[0].cat, 'นม ไข่ เบเกอรี่');
+  assert.equal(s.money.length, 1);
+  assert.deepEqual(S.sanitize({ tasks: [] }).shop, []);
+});

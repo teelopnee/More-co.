@@ -1,7 +1,8 @@
 // แปะไว้ — the UI. State lives in lib/store.js, Thai dates in lib/dates.js.
 
-import { addDays, dayKey, dayLabel, describeWhen, fromKey, longDate, parseWhen, shortDate, toTimestamp } from './lib/dates.js';
+import { addDays, dayKey, dayLabel, describeWhen, diffDays, fromKey, longDate, parseWhen, repeatLabel, shortDate, timeOf, toTimestamp } from './lib/dates.js';
 import * as S from './lib/store.js';
+import { MONEY_CATS, classify, findAmount } from './lib/sort.js';
 import { icsFileName, taskToICS } from './lib/ics.js';
 
 const VERSION = 'dev';
@@ -165,7 +166,10 @@ function render() {
   $('#today-label').textContent = shortDate(today);
   renderHero();
   renderTasks();
+  renderShop();
+  renderNotes();
   renderNoteHead();
+  renderMoney();
   renderFocus();
   // Android app: the banner stays until notch access is on. Web: until dismissed.
   $('#setup-banner').hidden = android ? notchOn() : !!state.prefs.guideDone;
@@ -190,7 +194,8 @@ function taskItem(t, { withDay = false } = {}) {
   const mins = timedToday ? minutesUntil(t) : null;
   const badges = [];
   if (withDay && t.day) {
-    badges.push(`<span class="badge">${icon('i-cal')}${esc(describeWhen(t.day, t.time, today))}</span>`);
+    const away = diffDays(today, t.day);
+    badges.push(`<span class="badge">${icon('i-cal')}${esc(describeWhen(t.day, t.time, today))}${away > 6 ? ` · อีก ${away} วัน` : ''}</span>`);
   } else if (t.time) {
     const tone = mins == null ? '' : mins <= 0 ? ' late' : mins <= 60 ? ' soon' : '';
     badges.push(`<span class="badge time${tone}">${icon('i-clock')}${esc(t.time)}</span>`);
@@ -199,6 +204,7 @@ function taskItem(t, { withDay = false } = {}) {
     const label = dayLabel(t.day, today);
     badges.push(`<span class="badge late">${label === 'เมื่อวาน' ? 'ค้างจากเมื่อวาน' : `ค้างจาก ${esc(label)}`}</span>`);
   }
+  if (t.repeat) badges.push(`<span class="badge rep">${icon('i-repeat')}${esc(repeatLabel(t.repeat))}${t.streak > 1 ? ` · ทำแล้ว ${t.streak} ครั้ง` : ''}</span>`);
   if (URL_RE.test(t.text)) badges.push(`<span class="badge">${icon('i-link')}ลิงก์</span>`);
   const later = !t.day || t.day < today ? 'วันนี้' : 'วันถัดไป';
   return `<li class="task${t.done ? ' done' : ''}" data-id="${esc(t.id)}">
@@ -210,7 +216,8 @@ function taskItem(t, { withDay = false } = {}) {
 </li>`;
 }
 
-const VIEW_NAMES = { tasks: 'งาน', notes: 'โน้ต', focus: 'โฟกัส' };
+const VIEW_NAMES = { tasks: 'งาน', notes: 'โน้ต', money: 'เงิน', focus: 'โฟกัส' };
+const baht = (n) => `฿${Number(n).toLocaleString('th-TH', { maximumFractionDigits: 2 })}`;
 
 function greeting() {
   const hour = new Date().getHours();
@@ -225,7 +232,14 @@ function renderHero() {
   $('#bar-title').textContent = mode === 'panel' ? 'แปะไว้' : VIEW_NAMES[view];
   if (view === 'notes') {
     $('#hero-title').textContent = 'โน้ต';
-    $('#hero-greet').textContent = noteDay === today ? `วันนี้ · ${shortDate(today)}` : longDate(noteDay);
+    $('#hero-greet').textContent = `${state.memos.length ? `${state.memos.length} โน้ตย่อ · ` : ''}บันทึก${noteDay === today ? `วันนี้ · ${shortDate(today)}` : longDate(noteDay)}`;
+    $('#hero-sub').innerHTML = '';
+    return;
+  }
+  if (view === 'money') {
+    const m = S.moneySummary(state, today);
+    $('#hero-title').textContent = m.today ? `วันนี้ใช้ไป ${baht(m.today)}` : 'วันนี้ยังไม่ได้ใช้เงิน';
+    $('#hero-greet').textContent = `7 วัน ${baht(m.weekTotal)} · เดือนนี้ ${baht(m.month)}`;
     $('#hero-sub').innerHTML = '';
     return;
   }
@@ -241,7 +255,8 @@ function renderHero() {
   const open = openCount(list);
   const done = list.length - open;
   $('#hero-title').textContent = !list.length ? 'วันนี้ยังว่าง' : open ? `วันนี้เหลือ ${open} เรื่อง` : 'วันนี้เคลียร์หมดแล้ว';
-  $('#hero-greet').textContent = `${greeting()} · ${shortDate(today)}${list.length ? ` · เสร็จ ${done}/${list.length}` : ''}`;
+  const spent = S.moneySummary(state, today).today;
+  $('#hero-greet').textContent = `${greeting()} · ${shortDate(today)}${list.length ? ` · เสร็จ ${done}/${list.length}` : ''}${spent ? ` · ใช้ไป ${baht(spent)}` : ''}`;
 
   const timed = list.filter((t) => !t.done && t.time && t.day === today).sort((a, b) => a.time.localeCompare(b.time));
   const next = timed.find((t) => minutesUntil(t) >= 0);
@@ -331,36 +346,78 @@ const hint = $('#capture-hint');
 const QUICK_DAYS = ['วันนี้', 'เย็นนี้', 'พรุ่งนี้', 'สุดสัปดาห์', 'สัปดาห์หน้า'];
 const quickChips = () => QUICK_DAYS.map((d) => `<button type="button" class="chip" data-chip="${d}">${d}</button>`).join('');
 
-function captureParse(text) {
-  return dropWhen ? { text: text.trim(), day: null, time: null } : parseWhen(text, Date.now());
+const KIND_ICON = { task: 'i-tasks', note: 'i-note', shop: 'i-cart', money: 'i-money' };
+const KIND_ORDER = ['task', 'note', 'shop', 'money'];
+let forceKind = null; // the person tapped the kind chip to choose
+let choiceFor = ''; // the text those choices (kind, no date) were made for
+
+function captureSort(text) {
+  return classify(text, Date.now(), { force: forceKind, noDate: dropWhen });
 }
 
+function kindLabel(r) {
+  if (r.kind === 'task') return r.day ? (r.repeat ? `เตือน${repeatLabel(r.repeat)}` : 'เตือน') : 'งาน';
+  if (r.kind === 'note') return 'โน้ต';
+  if (r.kind === 'shop') return r.items.length > 1 ? `ซื้อ ${r.items.length} อย่าง` : 'ของต้องซื้อ';
+  return r.amount ? `${baht(r.amount)} · ${r.cat}` : 'รายจ่าย · ใส่จำนวนเงิน';
+}
+
+/** Under the composer: what it will become (tap to change), the date, and the cleaned text. */
 function updateHint() {
   const text = input.value;
   if (!text.trim()) {
     dropWhen = false;
-    if (!hint.querySelector('.chip') || hint.querySelector('.when-chip')) hint.innerHTML = `<span class="chip-label">ใส่วัน</span>${quickChips()}`;
+    forceKind = null;
+    hint.dataset.sig = '';
+    if (!hint.querySelector('.chip') || hint.querySelector('.kind-chip')) hint.innerHTML = `<span class="chip-label">ใส่วัน</span>${quickChips()}`;
     return;
   }
-  const p = captureParse(text);
-  if (p.day) {
-    const label = describeWhen(p.day, p.time, today);
-    const chip = hint.querySelector('.when-chip');
-    // Keep the chip (and its pop-in) while only the text after it changes.
-    if (chip && chip.dataset.when === label) hint.querySelector('.parsed').textContent = p.text;
-    else hint.innerHTML = `<span class="when-chip" data-when="${esc(label)}">${icon('i-cal')}${esc(label)}<button type="button" data-action="drop-when" aria-label="ไม่ใส่วันเวลา">${icon('i-close')}</button></span><span class="dim parsed">${esc(p.text)}</span>`;
-  } else if (!hint.querySelector('.into-inbox')) {
-    hint.innerHTML = `<span class="chip-label into-inbox">ลงกล่องรับ หรือ</span>${dropWhen ? '' : quickChips()}`;
+  // A choice holds while the text is only extended or trimmed, not when it is replaced.
+  if ((forceKind || dropWhen) && !(text.startsWith(choiceFor) || choiceFor.startsWith(text))) {
+    forceKind = null;
+    dropWhen = false;
   }
+  choiceFor = forceKind || dropWhen ? text : '';
+  const r = captureSort(text);
+  const when = r.kind === 'task' && r.day ? describeWhen(r.day, r.time, today) : '';
+  const what = r.kind === 'shop' && r.items.length > 1 ? r.items.map((i) => i.text).join(' · ') : r.text;
+  const sig = `${r.kind}|${kindLabel(r)}|${when}|${dropWhen}`;
+  // Keep the chips (and their pop-in) while only the text after them changes.
+  if (hint.dataset.sig === sig) {
+    const parsed = hint.querySelector('.parsed');
+    if (parsed) parsed.textContent = what;
+    return;
+  }
+  hint.dataset.sig = sig;
+  const tone = r.kind === 'task' && r.day ? 'remind' : r.kind;
+  hint.innerHTML =
+    `<button type="button" class="kind-chip k-${tone}" data-action="cycle-kind" title="${esc(r.why)}" aria-label="เป็น${esc(kindLabel(r))} (${esc(r.why)}) แตะเพื่อเปลี่ยน">${icon(r.kind === 'task' && r.day ? 'i-clock' : KIND_ICON[r.kind])}<span>${esc(kindLabel(r))}</span></button>` +
+    (when ? `<span class="when-chip">${icon('i-cal')}${esc(when)}<button type="button" data-action="drop-when" aria-label="ไม่ใส่วันเวลา">${icon('i-close')}</button></span>` : '') +
+    `<span class="dim parsed">${esc(what)}</span>` +
+    (r.kind === 'task' && !r.day && !dropWhen ? quickChips() : '');
 }
 
-function addFromText(text, { parse = true } = {}) {
-  const p = parse ? captureParse(text) : { text: text.trim(), day: null, time: null };
-  const next = S.addTask(state, p);
+/** Puts one sorted entry where it belongs. Pure: returns the next state. */
+function route(st, r, now = Date.now()) {
+  if (r.kind === 'note') return S.addMemo(st, r.text, now);
+  if (r.kind === 'shop') return S.addShop(st, r.items.length ? r.items : [r.text], now);
+  if (r.kind === 'money') return r.amount ? S.addMoney(st, r, now) : S.addMemo(st, r.text, now);
+  return S.addTask(st, r, now);
+}
+
+/** Sorts and saves what was typed or shared; returns what to tell the person. */
+function capture(text, { shared = false } = {}) {
+  const r = shared ? classify(text, Date.now()) : captureSort(text);
+  if (r.kind === 'money' && !r.amount) return { error: 'ใส่จำนวนเงินด้วย เช่น “ข้าวมันไก่ 50”' };
+  const next = route(state, r);
   if (next === state) return null;
   commit(next, { undoable: true, animate: true });
   persistOnce();
-  return { id: next.tasks.at(-1).id, where: p.day ? describeWhen(p.day, p.time, today) : 'กล่องรับ' };
+  if (r.kind === 'note') return { kind: 'note', msg: 'เก็บเป็นโน้ตแล้ว' };
+  if (r.kind === 'shop') return { kind: 'shop', msg: r.items.length > 1 ? `เพิ่ม ${r.items.length} อย่างในของต้องซื้อ` : 'เพิ่มในของต้องซื้อแล้ว' };
+  if (r.kind === 'money') return { kind: 'money', msg: `จดรายจ่าย ${baht(r.amount)} · ${r.cat}` };
+  const where = r.day ? `${describeWhen(r.day, r.time, today)}${r.repeat ? ` · ${repeatLabel(r.repeat)}` : ''}` : 'กล่องรับ';
+  return { kind: 'task', id: next.tasks.at(-1).id, msg: `แปะไว้ที่${r.day ? ' ' : ''}${where}แล้ว` };
 }
 
 $('#capture').addEventListener('submit', (e) => {
@@ -370,17 +427,34 @@ $('#capture').addEventListener('submit', (e) => {
     input.focus();
     return;
   }
-  const added = addFromText(text);
+  const res = capture(text);
+  if (res?.error) {
+    toast(res.error);
+    input.focus();
+    return;
+  }
   input.value = '';
   dropWhen = false;
+  forceKind = null;
   updateHint();
   input.focus();
-  if (!added) return;
-  toast(`แปะไว้ที่${added.where === 'กล่องรับ' ? 'กล่องรับ' : ` ${added.where}`}แล้ว`, { label: 'เลิกทำ', run: undo });
-  if (view === 'tasks') flash(added.id);
+  if (!res) return;
+  toast(res.msg, { label: 'เลิกทำ', run: undo });
+  if (res.kind === 'task' && view === 'tasks') flash(res.id);
 });
 
 input.addEventListener('input', updateHint);
+
+// The on-screen keyboard is up when the window got much shorter while typing (not when a hardware
+// keyboard or a pop-up window is used): only then hide the tabs so the composer sits on it.
+let fullHeight = innerHeight;
+addEventListener('resize', () => {
+  const typing = document.activeElement === input;
+  if (!typing) fullHeight = innerHeight;
+  document.body.classList.toggle('kb', typing && innerHeight < fullHeight - 150);
+});
+input.addEventListener('focus', () => (fullHeight = Math.max(fullHeight, innerHeight)));
+input.addEventListener('blur', () => document.body.classList.remove('kb'));
 input.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   if (input.value) {
@@ -392,19 +466,32 @@ input.addEventListener('keydown', (e) => {
   }
 });
 
-// Several lines pasted at once = several things to remember.
+// Several lines pasted at once = several things, each sorted on its own.
 input.addEventListener('paste', (e) => {
   const text = e.clipboardData?.getData('text/plain') ?? '';
   const lines = text.split(/\r?\n/).map((l) => l.replace(/^\s*(?:[-*•☐]|\d+[.)])\s*/u, '').trim()).filter(Boolean);
   if (lines.length < 2) return;
   e.preventDefault();
   let next = state;
-  for (const line of lines) next = S.addTask(next, parseWhen(line, Date.now()));
+  const now = Date.now();
+  lines.forEach((line, i) => (next = route(next, classify(line, now), now + i)));
   commit(next, { undoable: true, animate: true });
-  toast(`แปะ ${lines.length} เรื่องแล้ว`, { label: 'เลิกทำ', run: undo });
+  toast(`แปะ ${lines.length} เรื่องแล้ว จัดให้ตามประเภท`, { label: 'เลิกทำ', run: undo });
 });
 
 hint.addEventListener('click', (e) => {
+  if (e.target.closest('[data-action="cycle-kind"]')) {
+    // task → note → shop → money (money only when there is an amount)
+    const current = captureSort(input.value).kind;
+    let next = KIND_ORDER[(KIND_ORDER.indexOf(current) + 1) % KIND_ORDER.length];
+    if (next === 'money' && !findAmount(input.value)) next = 'task';
+    forceKind = next;
+    choiceFor = input.value;
+    updateHint();
+    input.focus();
+    buzz(5);
+    return;
+  }
   const chip = e.target.closest('[data-chip]')?.dataset.chip;
   if (chip) {
     const text = input.value.trim();
@@ -418,7 +505,8 @@ hint.addEventListener('click', (e) => {
   }
   if (!e.target.closest('[data-action="drop-when"]')) return;
   dropWhen = true;
-  hint.innerHTML = '';
+  choiceFor = input.value;
+  hint.dataset.sig = '';
   updateHint();
   input.focus();
 });
@@ -468,12 +556,16 @@ if (Speech) {
 function setView(next) {
   view = next;
   for (const tab of $$('.tabs [role="tab"]')) tab.setAttribute('aria-selected', String(tab.dataset.view === next));
-  for (const id of ['tasks', 'notes', 'focus']) $(`#view-${id}`).hidden = id !== next;
+  for (const id of ['tasks', 'notes', 'money', 'focus']) $(`#view-${id}`).hidden = id !== next;
   moveInk();
   renderHero();
   renderFocus();
   if (innerWidth < 840) scrollTo({ top: 0 });
-  if (next === 'notes') syncNote();
+  if (next === 'notes') {
+    syncNote();
+    renderNotes();
+  }
+  if (next === 'money') renderMoney();
   if (next === 'focus') renderFocus();
 }
 
@@ -498,15 +590,25 @@ $('.tabs').addEventListener('click', (e) => {
 // ---------------------------------------------------------------------------
 // Task list actions
 
-$('#view-tasks').addEventListener('click', (e) => {
+function onListClick(e) {
   const action = e.target.closest('[data-action]')?.dataset.action;
   if (!action) return;
   const id = e.target.closest('.task')?.dataset.id;
+  const shopId = e.target.closest('[data-shop]')?.dataset.shop;
   if (swallowClick) {
     swallowClick = false;
     return;
   }
-  if (action === 'toggle' && id) {
+  if (action === 'shop-toggle' && shopId) {
+    const was = state.shop.find((i) => i.id === shopId)?.done;
+    commit(S.toggleShop(state, shopId), { undoable: true, animate: true });
+    if (!was) buzz(10);
+  } else if (action === 'shop-open' && shopId) {
+    openItem('shop', shopId);
+  } else if (action === 'clear-bought') {
+    commit(S.clearBought(state), { undoable: true, animate: true });
+    toast('ล้างของที่ซื้อแล้ว', { label: 'เลิกทำ', run: undo });
+  } else if (action === 'toggle' && id) {
     toggle(id);
   } else if (action === 'open' && id) {
     openTask(id);
@@ -519,7 +621,9 @@ $('#view-tasks').addEventListener('click', (e) => {
   } else if (action === 'dismiss-banner') {
     commit({ ...state, prefs: { ...state.prefs, guideDone: true } });
   }
-});
+}
+$('#view-tasks').addEventListener('click', onListClick);
+$('#search-results').addEventListener('click', onListClick);
 
 /** Tick a task off (or back on) with a little pop. */
 function toggle(id) {
@@ -547,7 +651,7 @@ const SWIPE_AT = 88;
 const board = $('#board');
 
 board.addEventListener('pointerdown', (e) => {
-  const row = e.target.closest('.task .row');
+  const row = e.target.closest('.task[data-id] .row');
   if (!row || e.button > 0) return;
   swipe = { row, li: row.parentElement, x0: e.clientX, y0: e.clientY, dx: 0, on: false, pointer: e.pointerId };
 });
@@ -622,6 +726,214 @@ $('#week').addEventListener('click', (e) => {
 });
 
 // ---------------------------------------------------------------------------
+// Shopping list, quick notes, search, money
+
+function shopItem(i) {
+  return `<li class="task shop-item${i.done ? ' done' : ''}" data-shop="${esc(i.id)}"><div class="row">
+<button type="button" class="check" data-action="shop-toggle" role="checkbox" aria-checked="${i.done}" aria-label="ซื้อแล้ว: ${esc(i.text)}">${icon('i-check')}</button>
+<button type="button" class="body" data-action="shop-open"><span class="text">${esc(i.text)}</span></button></div></li>`;
+}
+
+function renderShop() {
+  const g = S.shopGroups(state);
+  $('#shop-block').hidden = !state.shop.length;
+  $('#shop-count').textContent = countLabel(g.open);
+  $('#clear-bought').hidden = !g.bought.length;
+  $('#shop-list').innerHTML =
+    (g.groups.length ? `<ul class="list shop-list">${g.groups.map(({ cat, items }) => `<li class="shop-cat">${esc(cat)}</li>${items.map(shopItem).join('')}`).join('')}</ul>` : '') +
+    (g.bought.length ? `<ul class="list shop-list bought"><li class="shop-cat">ใส่ตะกร้าแล้ว</li>${g.bought.map(shopItem).join('')}</ul>` : '');
+}
+
+function ago(ms) {
+  const mins = Math.round((Date.now() - ms) / 60_000);
+  if (mins < 1) return 'เมื่อสักครู่';
+  if (mins < 60) return `${mins} นาทีที่แล้ว`;
+  const day = dayKey(new Date(ms));
+  if (day === today) return `วันนี้ ${timeOf(new Date(ms))}`;
+  return dayLabel(day, today);
+}
+
+function memoCard(m) {
+  const link = URL_RE.test(m.text);
+  return `<button type="button" class="memo${m.pinned ? ' pinned' : ''}" data-memo="${esc(m.id)}">
+${m.pinned ? `<span class="memo-pin">${icon('i-pin')}</span>` : ''}<span class="memo-text">${esc(m.text)}</span>
+<span class="memo-meta">${link ? `${icon('i-link')} ` : ''}${esc(ago(m.updatedAt))}</span></button>`;
+}
+
+function renderNotes() {
+  const q = $('#search').value.trim();
+  $('#search-results').hidden = !q;
+  $('#notes-main').hidden = !!q;
+  if (q) {
+    renderSearch(q);
+    return;
+  }
+  const memos = S.sortedMemos(state);
+  $('#memo-count').textContent = countLabel(memos.length);
+  $('#memos').innerHTML = memos.map(memoCard).join('');
+  $('#memos-empty').hidden = memos.length > 0;
+}
+
+function renderSearch(q) {
+  const r = S.search(state, q);
+  const part = (title, html) => (html ? `<h3>${title}</h3>${html}` : '');
+  const html =
+    part('งาน', r.tasks.length ? `<ul class="list">${r.tasks.map((t) => taskItem(t, { withDay: true })).join('')}</ul>` : '') +
+    part('โน้ตย่อ', r.memos.length ? `<div class="memos">${r.memos.map(memoCard).join('')}</div>` : '') +
+    part('บันทึกประจำวัน', r.notes.length ? `<ul class="list">${r.notes.map((n) => `<li class="plain-row"><button type="button" class="row-btn" data-note-day="${n.day}"><strong>${esc(shortDate(n.day, today))}</strong><span>${esc(n.line)}</span></button></li>`).join('')}</ul>` : '') +
+    part('ของต้องซื้อ', r.shop.length ? `<ul class="list shop-list">${r.shop.map(shopItem).join('')}</ul>` : '') +
+    part('รายจ่าย', r.money.length ? `<ul class="list">${r.money.map(moneyItem).join('')}</ul>` : '');
+  $('#search-results').innerHTML = html || `<p class="empty">ไม่เจอ “${esc(q)}”</p>`;
+}
+
+$('#search').addEventListener('input', () => renderNotes());
+
+$('#view-notes').addEventListener('click', (e) => {
+  const memo = e.target.closest('[data-memo]')?.dataset.memo;
+  if (memo) {
+    openItem('memo', memo);
+    return;
+  }
+  const money = e.target.closest('[data-money]')?.dataset.money;
+  if (money) {
+    openItem('money', money);
+    return;
+  }
+  const day = e.target.closest('[data-note-day]')?.dataset.noteDay;
+  if (day) {
+    $('#search').value = '';
+    noteDay = day;
+    renderNotes();
+    syncNote();
+    $('#note').scrollIntoView({ behavior: calm.matches ? 'auto' : 'smooth', block: 'center' });
+  }
+});
+
+function moneyItem(e) {
+  return `<li class="plain-row"><button type="button" class="row-btn money-row" data-money="${esc(e.id)}"><span class="mi"><span>${esc(e.text)}</span><small>${esc(e.cat)} · ${esc(timeOf(new Date(e.at)))}</small></span><strong>${baht(e.amount)}</strong></button></li>`;
+}
+
+function renderMoney() {
+  const m = S.moneySummary(state, today);
+  const has = state.money.length > 0;
+  $('#m-overview').hidden = !has;
+  $('#m-empty').hidden = has;
+  $('#m-today').textContent = baht(m.today);
+  $('#m-week').textContent = baht(m.weekTotal);
+  $('#m-month').textContent = baht(m.month);
+  const max = Math.max(1, ...m.week.map((w) => w.total));
+  const short = (n) => (n >= 1000 ? `${(n / 1000).toFixed(n >= 10_000 ? 0 : 1)}k` : String(Math.round(n)));
+  $('#m-bars').innerHTML = m.week
+    .map(
+      (w) =>
+        `<div class="mbar${w.day === today ? ' is-today' : ''}"><span class="mbar-v">${w.total ? short(w.total) : ''}</span><span class="mbar-track"><i style="--h:${((w.total / max) * 100).toFixed(1)}%"></i></span><span class="mbar-d">${WEEKDAYS_SHORT[fromKey(w.day).getDay()]}</span></div>`,
+    )
+    .join('');
+  const sum = m.byCat.reduce((n, c) => n + c.total, 0) || 1;
+  $('#m-cats').innerHTML = m.byCat
+    .map((c) => `<div class="cat-row"><span>${esc(c.cat)}</span><span class="cat-bar"><i style="--w:${((c.total / sum) * 100).toFixed(1)}%"></i></span><strong>${baht(c.total)}</strong></div>`)
+    .join('');
+  $('#m-days').innerHTML = m.days
+    .slice(0, 31)
+    .map((d) => `<section class="day"><h3>${esc(dayLabel(d.day, today))}<span class="dn2">${baht(d.total)}</span></h3><ul class="list">${d.items.map(moneyItem).join('')}</ul></section>`)
+    .join('');
+}
+
+$('#view-money').addEventListener('click', (e) => {
+  const id = e.target.closest('[data-money]')?.dataset.money;
+  if (id) openItem('money', id);
+});
+
+// One sheet edits a quick note, a thing to buy, or an expense.
+const itemDialog = $('#item-dialog');
+const itemForm = $('#item-form');
+let editingItem = null;
+
+function openItem(kind, id) {
+  const list = kind === 'memo' ? state.memos : kind === 'shop' ? state.shop : state.money;
+  const item = list.find((x) => x.id === id);
+  if (!item) return;
+  editingItem = { kind, id };
+  $('#item-title').textContent = kind === 'memo' ? 'โน้ตย่อ' : kind === 'shop' ? 'ของต้องซื้อ' : 'รายจ่าย';
+  itemForm.text.value = item.text;
+  itemForm.text.rows = kind === 'memo' ? 5 : 2;
+  $('#item-amount').hidden = kind !== 'money';
+  itemForm.amount.value = kind === 'money' ? item.amount : '';
+  const cats = $('#item-cats');
+  cats.hidden = kind !== 'money';
+  cats.innerHTML = kind === 'money' ? MONEY_CATS.map((c) => `<button type="button" data-cat="${esc(c)}" class="${c === item.cat ? 'on' : ''}">${esc(c)}</button>`).join('') : '';
+  $('[data-iact="pin"]', itemForm).hidden = kind !== 'memo';
+  $('[data-iact="pin"] span', itemForm).textContent = item.pinned ? 'เลิกปักหมุด' : 'ปักหมุด';
+  $('[data-iact="to-task"]', itemForm).hidden = kind === 'money';
+  $('[data-iact="link"]', itemForm).hidden = !URL_RE.test(item.text);
+  itemDialog.showModal();
+}
+
+function saveItem() {
+  if (!editingItem) return;
+  const { kind, id } = editingItem;
+  const text = itemForm.text.value;
+  if (kind === 'memo') commit(S.editMemo(state, id, text), { undoable: true });
+  if (kind === 'shop') commit(S.editShop(state, id, text), { undoable: true });
+  if (kind === 'money') {
+    const cat = $('#item-cats .on')?.dataset.cat;
+    commit(S.editMoney(state, id, { text, amount: Number(itemForm.amount.value), cat }), { undoable: true });
+  }
+}
+
+itemForm.addEventListener('submit', (e) => {
+  e.preventDefault();
+  saveItem();
+  itemDialog.close();
+});
+
+itemForm.addEventListener('click', async (e) => {
+  const cat = e.target.closest('[data-cat]');
+  if (cat) {
+    for (const b of $$('[data-cat]', itemForm)) b.classList.toggle('on', b === cat);
+    return;
+  }
+  const act = e.target.closest('[data-iact]')?.dataset.iact;
+  if (!act || !editingItem) return;
+  const { kind, id } = editingItem;
+  if (act === 'cancel') itemDialog.close();
+  if (act === 'pin') {
+    saveItem();
+    commit(S.pinMemo(state, id), { animate: true });
+    itemDialog.close();
+  }
+  if (act === 'link') window.open(itemForm.text.value.match(URL_RE)[0], '_blank', 'noopener');
+  if (act === 'copy') {
+    const text = itemForm.text.value;
+    try {
+      if (android) android.copyText(text);
+      else await navigator.clipboard.writeText(text);
+      toast('คัดลอกแล้ว');
+    } catch {
+      toast('คัดลอกไม่ได้');
+    }
+  }
+  if (act === 'to-task') {
+    const text = itemForm.text.value.trim();
+    const p = parseWhen(kind === 'shop' ? `ซื้อ${text}` : text, Date.now());
+    const without = kind === 'memo' ? S.deleteMemo(state, id) : S.deleteShop(state, id);
+    commit(S.addTask(without, p), { undoable: true, animate: true });
+    itemDialog.close();
+    toast(`ย้ายไปเป็นงาน${p.day ? ` ${describeWhen(p.day, p.time, today)}` : 'ในกล่องรับ'}แล้ว`, { label: 'เลิกทำ', run: undo });
+  }
+  if (act === 'delete') {
+    const next = kind === 'memo' ? S.deleteMemo(state, id) : kind === 'shop' ? S.deleteShop(state, id) : S.deleteMoney(state, id);
+    itemDialog.close();
+    commit(next, { undoable: true, animate: true });
+    toast('ลบแล้ว', { label: 'เลิกทำ', run: undo });
+  }
+});
+
+itemDialog.addEventListener('close', () => {
+  editingItem = null;
+});
+
+// ---------------------------------------------------------------------------
 // Task dialog
 
 const taskDialog = $('#task-dialog');
@@ -634,6 +946,7 @@ function openTask(id) {
   taskForm.text.value = t.text;
   taskForm.day.value = t.day ?? '';
   taskForm.time.value = t.time ?? '';
+  taskForm.repeat.value = t.repeat ? t.repeat.split(':')[0] : '';
   $('[data-act="link"]', taskForm).hidden = !URL_RE.test(t.text);
   markQuick();
   taskDialog.showModal();
@@ -655,7 +968,10 @@ function saveTask() {
   const t = state.tasks.find((x) => x.id === editingId);
   if (!t) return;
   const day = taskForm.day.value || null;
-  commit(S.editTask(state, t.id, { text: taskForm.text.value, day, time: day ? taskForm.time.value || null : null }), { undoable: true, animate: true });
+  const kind = taskForm.repeat.value;
+  const d = day ? fromKey(day) : null;
+  const repeat = !day || !kind ? null : kind === 'weekly' ? `weekly:${d.getDay()}` : kind === 'monthly' ? `monthly:${d.getDate()}` : kind;
+  commit(S.editTask(state, t.id, { text: taskForm.text.value, day, time: day ? taskForm.time.value || null : null, repeat }), { undoable: true, animate: true });
 }
 
 taskForm.day.addEventListener('input', markQuick);
@@ -1115,9 +1431,9 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault();
     input.focus();
     input.select();
-  } else if ((e.ctrlKey || e.altKey) && ['1', '2', '3'].includes(e.key)) {
+  } else if ((e.ctrlKey || e.altKey) && ['1', '2', '3', '4'].includes(e.key)) {
     e.preventDefault();
-    setView(['tasks', 'notes', 'focus'][Number(e.key) - 1]);
+    setView(['tasks', 'notes', 'money', 'focus'][Number(e.key) - 1]);
   }
 });
 
@@ -1134,14 +1450,11 @@ function handleLaunch() {
     if (v && !parts.some((p) => p.includes(v))) parts.push(v);
   }
   if (parts.length) {
-    const added = addFromText(parts.join(' '), { parse: false });
-    if (added) {
-      toast('รับเข้ากล่องรับแล้ว', { label: 'เลิกทำ', run: undo });
-      flash(added.id);
-    }
+    const res = capture(parts.join(' '), { shared: true });
+    if (res && !res.error) toast(`รับมาแล้ว: ${res.msg}`, { label: 'เลิกทำ', run: undo });
   }
   const v = params.get('view');
-  if (v === 'notes' || v === 'focus') setView(v);
+  if (['notes', 'money', 'focus'].includes(v)) setView(v);
   const minutes = Number(params.get('focus'));
   if (minutes > 0 && minutes <= 180) {
     if (!state.focus) commit(S.startFocus(state, minutes, Date.now()));
@@ -1220,13 +1533,11 @@ window.paewai = {
     android?.showKeyboard(); // after focus, so the keyboard opens on the input
   },
   show(next) {
-    if (['tasks', 'notes', 'focus'].includes(next)) setView(next);
+    if (['tasks', 'notes', 'money', 'focus'].includes(next)) setView(next);
   },
   addShared(text) {
-    const added = addFromText(String(text), { parse: false });
-    if (!added) return;
-    toast('รับเข้ากล่องรับแล้ว', { label: 'เลิกทำ', run: undo });
-    flash(added.id);
+    const res = capture(String(text), { shared: true });
+    if (res && !res.error) toast(`รับมาแล้ว: ${res.msg}`, { label: 'เลิกทำ', run: undo });
   },
   toast(message) {
     toast(message);

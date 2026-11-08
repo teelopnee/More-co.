@@ -1,13 +1,14 @@
 // App state and the pure functions that change it. Every function returns a new state object,
 // so the UI can keep the previous one for "เลิกทำ" (undo).
 
-import { addDays, dayKey } from './dates.js';
+import { addDays, dayKey, isRepeat, nextOccurrence } from './dates.js';
+import { MONEY_CATS, SHOP_SECTIONS, shopSection } from './sort.js';
 
 export const STORAGE_KEY = 'paewai:v1';
 export const FOCUS_PRESETS = [5, 15, 25, 50];
 
 export function emptyState() {
-  return { v: 1, tasks: [], notes: {}, focus: null, focusLog: {}, prefs: {} };
+  return { v: 1, tasks: [], notes: {}, memos: [], shop: [], money: [], focus: null, focusLog: {}, prefs: {} };
 }
 
 let counter = 0;
@@ -38,6 +39,40 @@ export function sanitize(raw) {
       doneAt: t.done && Number.isFinite(t.doneAt) ? t.doneAt : null,
       createdAt: Number.isFinite(t.createdAt) ? t.createdAt : Date.now(),
       alerted: !!t.alerted,
+      repeat: day && isRepeat(t.repeat) ? t.repeat : null,
+      streak: t.repeat && Number.isInteger(t.streak) && t.streak > 0 ? t.streak : 0,
+    });
+  }
+  const ids = new Set();
+  const freshId = (id) => {
+    const out = typeof id === 'string' && id && !ids.has(id) ? id : uid();
+    ids.add(out);
+    return out;
+  };
+  const when = (v) => (Number.isFinite(v) ? v : Date.now());
+  for (const m of Array.isArray(raw.memos) ? raw.memos : []) {
+    if (!m || typeof m.text !== 'string' || !m.text.trim()) continue;
+    state.memos.push({ id: freshId(m.id), text: m.text.slice(0, 20_000), pinned: !!m.pinned, createdAt: when(m.createdAt), updatedAt: when(m.updatedAt ?? m.createdAt) });
+  }
+  for (const i of Array.isArray(raw.shop) ? raw.shop : []) {
+    if (!i || typeof i.text !== 'string' || !i.text.trim()) continue;
+    state.shop.push({
+      id: freshId(i.id),
+      text: i.text.trim().slice(0, 200),
+      cat: SHOP_SECTIONS.includes(i.cat) ? i.cat : shopSection(i.text),
+      done: !!i.done,
+      doneAt: i.done && Number.isFinite(i.doneAt) ? i.doneAt : null,
+      createdAt: when(i.createdAt),
+    });
+  }
+  for (const e of Array.isArray(raw.money) ? raw.money : []) {
+    if (!e || !Number.isFinite(e.amount) || e.amount <= 0) continue;
+    state.money.push({
+      id: freshId(e.id),
+      text: typeof e.text === 'string' && e.text.trim() ? e.text.trim().slice(0, 200) : 'รายจ่าย',
+      amount: Math.round(e.amount * 100) / 100,
+      cat: MONEY_CATS.includes(e.cat) ? e.cat : 'อื่น ๆ',
+      at: when(e.at),
     });
   }
   if (raw.notes && typeof raw.notes === 'object') {
@@ -64,7 +99,7 @@ export function sanitize(raw) {
 
 const update = (state, id, fn) => ({ ...state, tasks: state.tasks.map((t) => (t.id === id ? fn(t) : t)) });
 
-export function addTask(state, { text, day = null, time = null }, now = Date.now()) {
+export function addTask(state, { text, day = null, time = null, repeat = null }, now = Date.now()) {
   const clean = String(text ?? '').trim();
   if (!clean) return state;
   const task = {
@@ -76,12 +111,27 @@ export function addTask(state, { text, day = null, time = null }, now = Date.now
     doneAt: null,
     createdAt: now,
     alerted: false,
+    repeat: day && isRepeat(repeat) ? repeat : null,
+    streak: 0,
   };
   return { ...state, tasks: [...state.tasks, task] };
 }
 
 export function toggleDone(state, id, now = Date.now()) {
-  return update(state, id, (t) => ({ ...t, done: !t.done, doneAt: t.done ? null : now }));
+  return update(state, id, (t) => {
+    if (t.repeat && !t.done) {
+      // A repeating reminder is never "done": it moves on to its next time.
+      const today = dayKey(new Date(now));
+      let next = nextOccurrence(t.repeat, t.day);
+      while (next < today) next = nextOccurrence(t.repeat, next);
+      return { ...t, day: next, alerted: false, streak: (t.streak ?? 0) + 1, lastDoneAt: now };
+    }
+    return { ...t, done: !t.done, doneAt: t.done ? null : now };
+  });
+}
+
+export function setRepeat(state, id, repeat) {
+  return update(state, id, (t) => ({ ...t, repeat: t.day && isRepeat(repeat) ? repeat : null }));
 }
 
 export function editTask(state, id, changes) {
@@ -90,7 +140,11 @@ export function editTask(state, id, changes) {
     if (typeof changes.text === 'string' && changes.text.trim()) next.text = changes.text.trim();
     if ('day' in changes) next.day = changes.day || null;
     if ('time' in changes) next.time = changes.time || null;
-    if (!next.day) next.time = null;
+    if ('repeat' in changes) next.repeat = isRepeat(changes.repeat) ? changes.repeat : null;
+    if (!next.day) {
+      next.time = null;
+      next.repeat = null;
+    }
     if (next.day !== t.day || next.time !== t.time) next.alerted = false;
     return next;
   });
@@ -98,7 +152,7 @@ export function editTask(state, id, changes) {
 
 /** Move to a day (or null = กล่อง). Keeps the time only when staying on the same day. */
 export function moveTask(state, id, day) {
-  return update(state, id, (t) => ({ ...t, day: day ?? null, time: day && day === t.day ? t.time : null, alerted: false }));
+  return update(state, id, (t) => ({ ...t, day: day ?? null, time: day && day === t.day ? t.time : null, repeat: day ? t.repeat : null, alerted: false }));
 }
 
 export function deleteTask(state, id) {
@@ -202,6 +256,144 @@ export function exportText(state, today, describe) {
   add('วันนี้', v.today);
   add('ข้างหน้า', [...v.ahead.flatMap((g) => g.tasks), ...v.later]);
   return lines.join('\n').trim();
+}
+
+// ---------------------------------------------------------------------------
+// Quick notes (Keep-style cards)
+
+export function addMemo(state, text, now = Date.now()) {
+  const clean = String(text ?? '').trim();
+  if (!clean) return state;
+  return { ...state, memos: [{ id: uid(now), text: clean, pinned: false, createdAt: now, updatedAt: now }, ...state.memos] };
+}
+
+export function editMemo(state, id, text, now = Date.now()) {
+  const clean = String(text ?? '').trim();
+  if (!clean) return deleteMemo(state, id);
+  return { ...state, memos: state.memos.map((m) => (m.id === id ? { ...m, text: clean, updatedAt: now } : m)) };
+}
+
+export function pinMemo(state, id) {
+  return { ...state, memos: state.memos.map((m) => (m.id === id ? { ...m, pinned: !m.pinned } : m)) };
+}
+
+export function deleteMemo(state, id) {
+  return { ...state, memos: state.memos.filter((m) => m.id !== id) };
+}
+
+/** Pinned first, then newest. */
+export function sortedMemos(state) {
+  return [...state.memos].sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt);
+}
+
+// ---------------------------------------------------------------------------
+// Shopping list, grouped by store section
+
+export function addShop(state, items, now = Date.now()) {
+  const fresh = items
+    .map((i) => (typeof i === 'string' ? { text: i } : i))
+    .filter((i) => i.text && i.text.trim())
+    .map((i, n) => ({ id: uid(now + n), text: i.text.trim(), cat: i.cat ?? shopSection(i.text), done: false, doneAt: null, createdAt: now }));
+  return fresh.length ? { ...state, shop: [...state.shop, ...fresh] } : state;
+}
+
+export function toggleShop(state, id, now = Date.now()) {
+  return { ...state, shop: state.shop.map((i) => (i.id === id ? { ...i, done: !i.done, doneAt: i.done ? null : now } : i)) };
+}
+
+export function editShop(state, id, text) {
+  const clean = String(text ?? '').trim();
+  if (!clean) return deleteShop(state, id);
+  return { ...state, shop: state.shop.map((i) => (i.id === id ? { ...i, text: clean, cat: shopSection(clean) } : i)) };
+}
+
+export function deleteShop(state, id) {
+  return { ...state, shop: state.shop.filter((i) => i.id !== id) };
+}
+
+export function clearBought(state) {
+  return { ...state, shop: state.shop.filter((i) => !i.done) };
+}
+
+/** [{ cat, items }] in store-walk order, then what is already in the basket. */
+export function shopGroups(state) {
+  const open = state.shop.filter((i) => !i.done);
+  const groups = SHOP_SECTIONS.map((cat) => ({ cat, items: open.filter((i) => i.cat === cat) })).filter((g) => g.items.length);
+  return { groups, bought: state.shop.filter((i) => i.done), open: open.length };
+}
+
+// ---------------------------------------------------------------------------
+// Money spent
+
+export function addMoney(state, { text, amount, cat }, now = Date.now()) {
+  if (!(amount > 0)) return state;
+  const entry = { id: uid(now), text: String(text ?? '').trim() || 'รายจ่าย', amount: Math.round(amount * 100) / 100, cat: MONEY_CATS.includes(cat) ? cat : 'อื่น ๆ', at: now };
+  return { ...state, money: [...state.money, entry] };
+}
+
+export function editMoney(state, id, changes) {
+  return {
+    ...state,
+    money: state.money.map((e) =>
+      e.id === id
+        ? {
+            ...e,
+            ...(typeof changes.text === 'string' && changes.text.trim() ? { text: changes.text.trim() } : {}),
+            ...(changes.amount > 0 ? { amount: Math.round(changes.amount * 100) / 100 } : {}),
+            ...(MONEY_CATS.includes(changes.cat) ? { cat: changes.cat } : {}),
+          }
+        : e,
+    ),
+  };
+}
+
+export function deleteMoney(state, id) {
+  return { ...state, money: state.money.filter((e) => e.id !== id) };
+}
+
+/** Today, the last 7 days (oldest first), this month, and by category for the last 30 days. */
+export function moneySummary(state, today) {
+  const dayOf = (e) => dayKey(new Date(e.at));
+  const sum = (list) => Math.round(list.reduce((n, e) => n + e.amount, 0) * 100) / 100;
+  const week = [];
+  for (let i = 6; i >= 0; i--) {
+    const day = addDays(today, -i);
+    week.push({ day, total: sum(state.money.filter((e) => dayOf(e) === day)) });
+  }
+  const month = today.slice(0, 7);
+  const since = addDays(today, -29);
+  const byCat = {};
+  for (const e of state.money) if (dayOf(e) >= since && dayOf(e) <= today) byCat[e.cat] = (byCat[e.cat] ?? 0) + e.amount;
+  const days = {};
+  for (const e of [...state.money].sort((a, b) => b.at - a.at)) (days[dayOf(e)] ??= []).push(e);
+  return {
+    today: sum(state.money.filter((e) => dayOf(e) === today)),
+    week,
+    weekTotal: sum(week.flatMap((w) => state.money.filter((e) => dayOf(e) === w.day))),
+    month: sum(state.money.filter((e) => dayOf(e).startsWith(month))),
+    byCat: Object.entries(byCat).map(([cat, total]) => ({ cat, total: Math.round(total * 100) / 100 })).sort((a, b) => b.total - a.total),
+    days: Object.entries(days).map(([day, items]) => ({ day, items, total: sum(items) })),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Search everything
+
+export function search(state, query) {
+  const q = String(query ?? '').trim().toLowerCase();
+  if (!q) return { tasks: [], memos: [], notes: [], shop: [], money: [] };
+  const has = (t) => String(t ?? '').toLowerCase().includes(q);
+  return {
+    tasks: state.tasks.filter((t) => has(t.text)).slice(0, 50),
+    memos: sortedMemos(state).filter((m) => has(m.text)).slice(0, 50),
+    notes: Object.entries(state.notes)
+      .filter(([, text]) => has(text))
+      .sort((a, b) => b[0].localeCompare(a[0]))
+      .map(([day, text]) => ({ day, line: text.split('\n').find((l) => has(l)) ?? '' }))
+      .slice(0, 30),
+    shop: state.shop.filter((i) => has(i.text)),
+    money: state.money.filter((e) => has(e.text) || has(e.cat)).slice(-50).reverse(),
+  };
 }
 
 // ---------------------------------------------------------------------------

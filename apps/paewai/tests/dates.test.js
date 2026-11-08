@@ -135,3 +135,33 @@ test('calendar dates', () => {
 test('only a date phrase: keeps the words as the text', () => {
   assert.deepEqual(when('พรุ่งนี้'), ['พรุ่งนี้', '2026-11-09', null]);
 });
+
+test('repeats', async () => {
+  const { nextOccurrence, repeatLabel, isRepeat } = await import('../src/lib/dates.js');
+  const r = (s) => {
+    const p = parseWhen(s, NOW);
+    return [p.text, p.day, p.time, p.repeat];
+  };
+  assert.deepEqual(r('ทุกวัน 8 โมง กินยา'), ['กินยา', '2026-11-09', '08:00', 'daily']); // 8:00 has passed today
+  assert.deepEqual(r('กินยาทุกวันสองทุ่ม'), ['กินยา', '2026-11-08', '20:00', 'daily']);
+  assert.deepEqual(r('ทุกวันจันทร์ ทิ้งขยะ'), ['ทิ้งขยะ', '2026-11-09', null, 'weekly:1']);
+  assert.deepEqual(r('ทุกจันทร์ ทิ้งขยะ'), ['ทิ้งขยะ', '2026-11-09', null, 'weekly:1']);
+  assert.deepEqual(r('ทุกวันอาทิตย์ ไปวัด'), ['ไปวัด', '2026-11-08', null, 'weekly:0']);
+  assert.deepEqual(r('ทุกอาทิตย์ ล้างรถ'), ['ล้างรถ', '2026-11-08', null, 'weekly:0']); // every week, from today
+  assert.deepEqual(r('จ่ายบัตร ทุกวันที่ 25'), ['จ่ายบัตร', '2026-11-25', null, 'monthly:25']);
+  assert.deepEqual(r('ทุกเดือนวันที่ 31 จ่ายค่าเช่า'), ['จ่ายค่าเช่า', '2026-11-30', null, 'monthly:31']);
+  assert.deepEqual(r('ทุกวันทำงาน 7 โมง ตื่น'), ['ตื่น', '2026-11-09', '07:00', 'weekdays']);
+  assert.deepEqual(r('วันเกิดแม่ 3 มี.ค. ทุกปี'), ['วันเกิดแม่', '2027-03-03', null, 'yearly']);
+  assert.deepEqual(r('ทุกสัปดาห์ วันศุกร์ ส่งรายงาน'), ['ส่งรายงาน', '2026-11-13', null, 'weekly:5']);
+  assert.equal(parseWhen('ซื้อนม', NOW).repeat, null);
+
+  assert.equal(nextOccurrence('daily', '2026-11-08'), '2026-11-09');
+  assert.equal(nextOccurrence('weekdays', '2026-11-13'), '2026-11-16');
+  assert.equal(nextOccurrence('weekly:1', '2026-11-09'), '2026-11-16');
+  assert.equal(nextOccurrence('monthly:31', '2026-11-30'), '2026-12-31');
+  assert.equal(nextOccurrence('monthly:31', '2027-01-31'), '2027-02-28');
+  assert.equal(nextOccurrence('yearly', '2028-02-29'), '2029-02-28');
+  assert.equal(repeatLabel('weekly:1'), 'ทุกวันจันทร์');
+  assert.equal(repeatLabel('monthly:25'), 'ทุกวันที่ 25');
+  assert.ok(isRepeat('monthly:31') && !isRepeat('monthly:32') && !isRepeat('hourly'));
+});
