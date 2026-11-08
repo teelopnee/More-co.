@@ -9,6 +9,7 @@
 |---|---|---|
 | จดไว — จดรายรับรายจ่ายจากสลิป | [/jodwai/](https://teelopnee.github.io/More-co./jodwai/) | [`apps/jodwai`](apps/jodwai) |
 | อ่าวสนธยา — เกมแล่นเรือใบ 3 มิติ | [/sunset-cove/](https://teelopnee.github.io/More-co./sunset-cove/) | [`apps/sunset-cove`](apps/sunset-cove) |
+| แปะไว้ — แปะทุกเรื่องที่ค้างในหัว (เปิดจากขอบจอแท็บเล็ต Samsung) | [/paewai/](https://teelopnee.github.io/More-co./paewai/) | [`apps/paewai`](apps/paewai) |
 
 | เอกสาร | |
 |---|---|

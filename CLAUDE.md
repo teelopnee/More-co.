@@ -10,6 +10,8 @@ computer and writes in Thai; reply in Thai.
   - `apps/sunset-cove/`: อ่าวสนธยา, a single-file three.js sailing game (plain HTML, no build).
     It began as an artifact page and calls `window.claude?.hot` only when present; keep the
     doctype/charset/viewport tags and the `[hidden] { display: none !important; }` rule.
+  - `apps/paewai/`: แปะไว้, a no-dependency PWA "brain dump" for the Samsung tablet (Edge panel +
+    pop-up window). Thai natural-language dates in `src/lib/dates.js`; `npm test`, `npm run build`.
 - `docs/*.md`: design docs. `docs/odd-space-gdd.md` is the source of truth for the ODD-SPACE
   game (Godot 4); `docs/originals/*.docx` is a frozen copy, do not edit it.
 - `scripts/build-site.mjs`: installs, tests and builds every app into `_site/` and writes the

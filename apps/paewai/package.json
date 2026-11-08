@@ -1,0 +1,16 @@
+{
+  "name": "paewai",
+  "private": true,
+  "version": "1.0.0",
+  "description": "แปะไว้ — แปะทุกเรื่องที่ค้างในหัวไว้ก่อน แล้วกลับไปทำงานต่อ ใช้บนแท็บเล็ต Samsung เป็นหน้าต่างลอยจากขอบจอได้",
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node --test \"tests/*.test.js\"",
+    "dev": "node scripts/build.mjs && node scripts/serve.mjs dist",
+    "icons": "node scripts/make-icons.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

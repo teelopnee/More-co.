@@ -1,0 +1,44 @@
+{
+  "id": "./",
+  "name": "แปะไว้ — แปะทุกเรื่องที่ค้างในหัว",
+  "short_name": "แปะไว้",
+  "description": "แปะทุกเรื่องที่ค้างในหัวไว้ก่อน แล้วกลับไปทำงานต่อ เปิดจากขอบจอแท็บเล็ต Samsung เป็นหน้าต่างลอยได้",
+  "lang": "th",
+  "dir": "ltr",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f7f5ef",
+  "theme_color": "#f7f5ef",
+  "categories": ["productivity"],
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "icons/favicon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ],
+  "shortcuts": [
+    {
+      "name": "แปะเรื่องใหม่",
+      "short_name": "แปะใหม่",
+      "url": "./?new=1",
+      "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "โน้ตวันนี้",
+      "url": "./?view=notes",
+      "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "โฟกัส 25 นาที",
+      "url": "./?focus=25",
+      "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    }
+  ],
+  "share_target": {
+    "action": "./",
+    "method": "GET",
+    "params": { "title": "title", "text": "text", "url": "url" }
+  }
+}
