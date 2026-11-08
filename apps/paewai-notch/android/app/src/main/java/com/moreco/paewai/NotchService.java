@@ -12,6 +12,8 @@ import android.hardware.display.DisplayManager;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
+import android.text.TextPaint;
+import android.util.TypedValue;
 import android.view.Display;
 import android.view.DisplayCutout;
 import android.view.Gravity;
@@ -19,11 +21,12 @@ import android.view.View;
 import android.view.WindowInsets;
 import android.view.WindowManager;
 import android.view.accessibility.AccessibilityEvent;
-import android.view.animation.DecelerateInterpolator;
+import android.view.animation.PathInterpolator;
 
 import org.json.JSONObject;
 
 import java.util.List;
+import java.util.Locale;
 
 /**
  * Draws the pill over the camera cut-out, above the status bar, in every app.
@@ -33,11 +36,22 @@ import java.util.List;
 public class NotchService extends AccessibilityService {
     static NotchService instance;
 
+    /** How far the pill reaches past each side of the camera, per state (dp). */
+    private static final float WING_IDLE = 12;
+    private static final float WING_COUNT = 34;
+    private static final float WING_TIMER = 52;
+    private static final float WING_PAUSED = 40;
+    /** One UI basic motion curve. */
+    private static final PathInterpolator ONE_UI = new PathInterpolator(0.22f, 0.25f, 0f, 1f);
+
     private final Handler handler = new Handler(Looper.getMainLooper());
     private WindowManager wm;
     private PillView pill;
     private WindowManager.LayoutParams lp;
     private PillGeometry geometry;
+    private float wing = WING_IDLE;
+    private float targetWing = WING_IDLE;
+    private float extra;
     private boolean sawStatusBar;
     private boolean statusBarHidden;
     private boolean flashing;
@@ -46,7 +60,7 @@ public class NotchService extends AccessibilityService {
     private final Runnable tick = new Runnable() {
         @Override
         public void run() {
-            long next = updateLabel();
+            long next = updateContent();
             handler.postDelayed(this, next);
         }
     };
@@ -63,7 +77,7 @@ public class NotchService extends AccessibilityService {
         return false;
     }
 
-    /** Called after the web app saves: redraw the label, show or hide the pill. */
+    /** Called after the web app saves: redraw the content, show or hide the pill. */
     static void refreshIfRunning() {
         NotchService s = instance;
         if (s != null) s.refresh();
@@ -72,6 +86,13 @@ public class NotchService extends AccessibilityService {
     static void flashIfRunning(String text) {
         NotchService s = instance;
         if (s != null) s.flash(text);
+    }
+
+    @Override
+    public void onCreate() {
+        // Services get a light default theme; ours follows day/night so nothing gets "force-darkened".
+        setTheme(R.style.Theme_Paewai);
+        super.onCreate();
     }
 
     @Override
@@ -108,7 +129,7 @@ public class NotchService extends AccessibilityService {
     public void onConfigurationChanged(Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
         // Rotation: the cut-out moves to another edge. Wait for the display to settle.
-        handler.postDelayed(this::layout, 300);
+        handler.postDelayed(this::relayout, 300);
     }
 
     void refresh() {
@@ -134,8 +155,7 @@ public class NotchService extends AccessibilityService {
             @Override
             public void onLongPress() {
                 collapse();
-                Intent i = new Intent(NotchService.this, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                startActivity(i);
+                startActivity(new Intent(NotchService.this, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
             }
         });
         pill.setOnApplyWindowInsetsListener((v, insets) -> {
@@ -162,8 +182,9 @@ public class NotchService extends AccessibilityService {
         lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;
         lp.setFitInsetsTypes(0);
         lp.setTitle("แปะไว้");
-        computeGeometry();
-        applyGeometry(geometry.x, geometry.y, geometry.width, geometry.height);
+        updateContent();
+        wing = targetWing;
+        setShape(wing, 0);
         try {
             wm.addView(pill, lp);
         } catch (RuntimeException e) {
@@ -185,10 +206,10 @@ public class NotchService extends AccessibilityService {
         }
     }
 
-    private void computeGeometry() {
+    private PillGeometry computeGeometry(float wingDp) {
         Rect bounds = wm.getMaximumWindowMetrics().getBounds();
         float density = getResources().getDisplayMetrics().density;
-        geometry = PillGeometry.compute(bounds.width(), bounds.height(), cutoutRect(), density);
+        return PillGeometry.compute(bounds.width(), bounds.height(), cutoutRect(), density, Math.round(wingDp));
     }
 
     private int[] cutoutRect() {
@@ -199,10 +220,7 @@ public class NotchService extends AccessibilityService {
         } catch (RuntimeException ignored) {
             // fall through
         }
-        if (cutout == null) {
-            WindowInsets insets = wm.getMaximumWindowMetrics().getWindowInsets();
-            cutout = insets.getDisplayCutout();
-        }
+        if (cutout == null) cutout = wm.getMaximumWindowMetrics().getWindowInsets().getDisplayCutout();
         if (cutout == null) return null;
         List<Rect> rects = cutout.getBoundingRects();
         for (Rect r : rects) {
@@ -211,22 +229,43 @@ public class NotchService extends AccessibilityService {
         return null;
     }
 
-    private void layout() {
+    private void relayout() {
         if (pill == null) return;
         if (animator != null) animator.cancel();
         flashing = false;
         pill.setMessage(null);
-        computeGeometry();
-        applyGeometry(geometry.x, geometry.y, geometry.width, geometry.height);
+        wing = targetWing;
+        setShape(wing, 0);
+        applyVisibility();
+    }
+
+    /** Lays the window out for a wing size and an extra depth (reminder message). */
+    private void setShape(float wingDp, float extraPx) {
+        wing = wingDp;
+        extra = extraPx;
+        geometry = computeGeometry(wingDp);
+        int add = geometry.vertical() ? 0 : Math.round(extraPx);
+        lp.x = geometry.x;
+        lp.y = geometry.y;
+        lp.width = geometry.width;
+        lp.height = geometry.height + add;
+        pill.setShape(geometry, add);
         update();
     }
 
-    private void applyGeometry(int x, int y, int w, int h) {
-        lp.x = x;
-        lp.y = y;
-        lp.width = w;
-        lp.height = h;
-        pill.setGeometry(geometry, x - geometry.x, y - geometry.y);
+    private void animateShape(float toWing, float toExtra, long ms) {
+        if (pill == null) return;
+        if (animator != null) animator.cancel();
+        float fromWing = wing, fromExtra = extra;
+        if (Math.abs(fromWing - toWing) < 0.5f && Math.abs(fromExtra - toExtra) < 0.5f) return;
+        animator = ValueAnimator.ofFloat(0f, 1f);
+        animator.setDuration(ms);
+        animator.setInterpolator(ONE_UI);
+        animator.addUpdateListener(a -> {
+            float f = (float) a.getAnimatedValue();
+            setShape(fromWing + (toWing - fromWing) * f, fromExtra + (toExtra - fromExtra) * f);
+        });
+        animator.start();
     }
 
     private void update() {
@@ -247,74 +286,77 @@ public class NotchService extends AccessibilityService {
         if (flags != lp.flags) update();
     }
 
-    /** Updates the label; returns when to look again. */
-    private long updateLabel() {
+    /** Picks what the pill shows, grows or shrinks it to fit; returns when to look again. */
+    private long updateContent() {
         if (pill == null) return 60_000;
         JSONObject s = Prefs.summary(this);
         JSONObject focus = s.optJSONObject("focus");
         long now = System.currentTimeMillis();
+        boolean vertical = geometry != null && geometry.vertical();
+        int kind = PillView.IDLE;
+        String text = "";
+        float progress = 0;
+        long next = 60_000;
         if (focus != null) {
             long endsAt = focus.optLong("endsAt", 0);
+            long total = Math.max(1, focus.optLong("totalMs", 0));
             if (endsAt > now) {
-                long secs = (endsAt - now + 999) / 1000;
-                pill.setLabel(String.format(java.util.Locale.ROOT, "%d:%02d", secs / 60, secs % 60));
-                return 1000 - (endsAt - now) % 1000 + 5;
-            }
-            if (focus.optLong("leftMs", 0) > 0 && endsAt == 0) {
-                pill.setLabel("พัก");
-                return 60_000;
+                long left = endsAt - now;
+                long secs = (left + 999) / 1000;
+                kind = PillView.TIMER;
+                text = vertical ? String.valueOf((secs + 59) / 60) : String.format(Locale.ROOT, "%d:%02d", secs / 60, secs % 60);
+                progress = focus.optLong("totalMs", 0) > 0 ? 1f - (float) left / total : 0;
+                next = 1000 - left % 1000 + 5;
+            } else if (endsAt == 0 && focus.optLong("leftMs", 0) > 0) {
+                long left = focus.optLong("leftMs", 0);
+                kind = PillView.PAUSED;
+                text = vertical ? "II" : "พัก";
+                progress = focus.optLong("totalMs", 0) > 0 ? 1f - (float) left / total : 0;
             }
         }
-        int open = Prefs.openToday(s);
-        pill.setLabel(open > 0 ? String.valueOf(open) : "");
-        return 60_000;
+        if (kind == PillView.IDLE) {
+            int open = Prefs.openToday(s);
+            if (open > 0) {
+                kind = PillView.COUNT;
+                text = open > 99 ? "99+" : String.valueOf(open);
+            }
+        }
+        pill.setContent(kind, text, progress);
+        float wantWing = kind == PillView.TIMER ? WING_TIMER : kind == PillView.PAUSED ? WING_PAUSED : kind == PillView.COUNT ? WING_COUNT : WING_IDLE;
+        if (vertical) wantWing = Math.min(wantWing, WING_COUNT);
+        if (wantWing != targetWing) {
+            targetWing = wantWing;
+            if (!flashing && geometry != null) animateShape(targetWing, 0, 420);
+        }
+        return next;
     }
 
-    /** Grows the pill to show a reminder for a few seconds (top edge only). */
+    /** Grows the pill downward to show a reminder for a few seconds (top edge only). */
     void flash(String text) {
         if (pill == null || geometry == null || geometry.vertical()) return;
+        float density = getResources().getDisplayMetrics().density;
         Rect bounds = wm.getMaximumWindowMetrics().getBounds();
-        float dp = getResources().getDisplayMetrics().density;
-        int targetW = Math.min(Math.round(bounds.width() * 0.6f), Math.max(geometry.width, Math.round(pillTextWidth(text) + 48 * dp)));
-        int targetH = geometry.height + Math.round(34 * dp);
-        int centre = geometry.x + (geometry.holeStart + geometry.holeEnd) / 2;
-        int targetX = PillGeometry.clamp(centre - targetW / 2, 0, bounds.width() - targetW);
+        TextPaint p = new TextPaint();
+        p.setTextSize(TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, 14, getResources().getDisplayMetrics()));
+        float hole = geometry.holeEnd - geometry.holeStart;
+        float needLen = Math.min(bounds.width() * 0.62f, p.measureText(text) + 64 * density);
+        float needWing = Math.max(targetWing, ((needLen - hole) / 2f) / density - PillGeometry.EAR_DP);
         flashing = true;
         applyVisibility();
         pill.setMessage(text);
-        animate(targetX, targetW, targetH);
+        animateShape(needWing, 38 * density, 460);
         handler.removeCallbacks(endFlash);
         handler.postDelayed(endFlash, 7000);
-    }
-
-    private float pillTextWidth(String text) {
-        android.text.TextPaint p = new android.text.TextPaint();
-        p.setTextSize(14 * getResources().getDisplayMetrics().scaledDensity);
-        return p.measureText(text);
     }
 
     private void collapse() {
         handler.removeCallbacks(endFlash);
         if (!flashing || pill == null) return;
         flashing = false;
-        animate(geometry.x, geometry.width, geometry.height);
+        animateShape(targetWing, 0, 360);
         handler.postDelayed(() -> {
             if (!flashing && pill != null) pill.setMessage(null);
             applyVisibility();
-        }, 260);
-    }
-
-    private void animate(int toX, int toW, int toH) {
-        if (animator != null) animator.cancel();
-        int fromX = lp.x, fromW = lp.width, fromH = lp.height;
-        animator = ValueAnimator.ofFloat(0f, 1f);
-        animator.setDuration(240);
-        animator.setInterpolator(new DecelerateInterpolator());
-        animator.addUpdateListener(a -> {
-            float f = (float) a.getAnimatedValue();
-            applyGeometry(Math.round(fromX + (toX - fromX) * f), geometry.y, Math.round(fromW + (toW - fromW) * f), Math.round(fromH + (toH - fromH) * f));
-            update();
-        });
-        animator.start();
+        }, 380);
     }
 }

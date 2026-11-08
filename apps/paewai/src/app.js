@@ -64,7 +64,7 @@ function syncAndroid() {
   }
   const summary = {
     openDays: state.tasks.filter((t) => !t.done && t.day).map((t) => t.day),
-    focus: f ? { endsAt: f.endsAt ?? 0, leftMs: f.leftMs ?? 0 } : null,
+    focus: f ? { endsAt: f.endsAt ?? 0, leftMs: f.leftMs ?? 0, totalMs: f.totalMs } : null,
     reminders,
   };
   try {

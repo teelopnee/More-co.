@@ -21,7 +21,7 @@ public class ReminderReceiver extends BroadcastReceiver {
         String id = intent.getStringExtra("id");
         if (title == null) title = "แปะไว้";
         if (text == null) text = "";
-        NotchService.flashIfRunning(text.isEmpty() ? title : text);
+        NotchService.flashIfRunning(text.isEmpty() ? title : title + " · " + text);
         notify(c, id, title, text);
     }
 
