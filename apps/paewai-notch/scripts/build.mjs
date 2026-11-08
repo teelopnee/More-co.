@@ -5,7 +5,7 @@
 // Needs Java 17+ and an Android SDK (ANDROID_HOME). GitHub's ubuntu runners have both.
 // Outside CI without an SDK it writes the page only, so `node scripts/build-site.mjs` still works.
 //
-//   node scripts/build.mjs            PAEWAI_GRADLE=/path/to/gradle to skip the wrapper download
+//   node scripts/build.mjs            PAEWAI_GRADLE=/path/to/gradle to use a Gradle you already have
 
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -35,6 +35,40 @@ const versionCode = Math.floor((now.getTime() - Date.UTC(2026, 0, 1)) / 60_000);
 const versionName = `${now.toISOString().slice(0, 10).replace(/-/g, '.')}${sha ? `-${sha}` : ''}`;
 
 // 3. Gradle.
+
+/**
+ * The wrapper's own downloader stalls on services.gradle.org's redirect (seen on GitHub's runners
+ * and elsewhere), so fetch the pinned distribution with curl, check it, and cache it.
+ * Returns the gradle binary, or null to fall back to ./gradlew.
+ */
+function fetchGradle() {
+  const version = '8.14.3';
+  const sha256 = 'bd71102213493060956ec229d946beee57158dbd89d0e62b91bca0fa2c5f3531';
+  if (process.platform === 'win32') return null;
+  const home = join(process.env.RUNNER_TOOL_CACHE || tmpdir(), 'paewai-gradle');
+  const bin = join(home, `gradle-${version}`, 'bin', 'gradle');
+  if (existsSync(bin)) return bin;
+  mkdirSync(home, { recursive: true });
+  const zip = join(home, `gradle-${version}-bin.zip`);
+  for (const url of [
+    `https://github.com/gradle/gradle-distributions/releases/download/v${version}/gradle-${version}-bin.zip`,
+    `https://services.gradle.org/distributions/gradle-${version}-bin.zip`,
+  ]) {
+    const got = spawnSync('curl', ['-fsSL', '--retry', '3', '--connect-timeout', '20', '-o', zip, url], { stdio: 'inherit' });
+    if (got.status !== 0 || !existsSync(zip)) continue;
+    if (createHash('sha256').update(readFileSync(zip)).digest('hex') !== sha256) {
+      console.warn(`paewai-notch: checksum ไม่ตรง ${url}`);
+      rmSync(zip, { force: true });
+      continue;
+    }
+    const unzipped = spawnSync('unzip', ['-q', '-o', zip, '-d', home], { stdio: 'inherit' });
+    rmSync(zip, { force: true });
+    if (unzipped.status === 0 && existsSync(bin)) return bin;
+  }
+  console.warn('paewai-notch: ดาวน์โหลด Gradle เองไม่ได้ ใช้ gradlew แทน');
+  return null;
+}
+
 const sdk = process.env.ANDROID_HOME || process.env.ANDROID_SDK_ROOT;
 let apk = null;
 let stable = false;
@@ -46,7 +80,7 @@ if (!sdk) {
   }
   console.warn('paewai-notch: ไม่มี Android SDK ในเครื่องนี้ ข้ามการสร้าง APK (บน GitHub Actions จะสร้างให้)');
 } else {
-  const gradle = process.env.PAEWAI_GRADLE || join(android, process.platform === 'win32' ? 'gradlew.bat' : 'gradlew');
+  const gradle = process.env.PAEWAI_GRADLE || fetchGradle() || join(android, process.platform === 'win32' ? 'gradlew.bat' : 'gradlew');
   const env = { ...process.env, ANDROID_HOME: sdk, PAEWAI_VERSION_CODE: String(versionCode), PAEWAI_VERSION_NAME: versionName };
   // The stable signing key comes from a GitHub secret (base64 of the .p12), never from the repo.
   if (process.env.PAEWAI_KEYSTORE_B64 && process.env.PAEWAI_KEYSTORE_PASSWORD) {
