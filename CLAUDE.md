@@ -16,9 +16,13 @@ computer and writes in Thai; reply in Thai.
     `src/lib/github.js`; token stored per device, never in the data or this repo). "ถาม Claude" uses
     the bundled official SDK in `src/vendor/anthropic.js` with the owner's own key, or opens claude.ai.
     `src/vendor/` holds pre-bundled third-party code; regenerate it as the app README says.
+    Voice notes (`src/lib/voice.js`, IndexedDB) are transcribed with the owner's Gemini/OpenAI key
+    (Claude takes no audio) and summarized into mind maps (`src/lib/mindmap.js`, `src/mapview.js`).
+    The font is Sarabun, shipped in `src/fonts/` (OFL).
   - `apps/paewai-notch/`: the same แปะไว้ as an Android app (Java, Gradle in `android/`) with a pill
     over the camera notch (accessibility overlay) and a drop-down panel; it bundles `../paewai/src`
-    into the APK, so web changes ship in both. `npm run build` needs Java 17+ and `ANDROID_HOME`
+    into the APK, so web changes ship in both. It also records voice natively (`RecorderService`,
+    foreground microphone service; Quick Settings tile and an "อัดเสียง" launcher icon for the side key). `npm run build` needs Java 17+ and `ANDROID_HOME`
     (CI has both; without an SDK it builds only the download page). Never commit a signing key:
     the stable key comes from the `PAEWAI_KEYSTORE_B64` / `PAEWAI_KEYSTORE_PASSWORD` secrets; without
     them the APK is a debug-signed preview that cannot install over an earlier build.

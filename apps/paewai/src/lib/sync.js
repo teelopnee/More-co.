@@ -13,7 +13,7 @@ import { pastedLines } from './sort.js';
 export const DATA_PATH = 'paewai.json';
 export const INBOX_DIR = 'inbox';
 export const GUIDE_PATH = 'CLAUDE.md';
-export const LISTS = ['tasks', 'memos', 'shop', 'money'];
+export const LISTS = ['tasks', 'memos', 'shop', 'money', 'recs', 'maps'];
 export const PUBLIC_URL = 'https://teelopnee.github.io/More-co./paewai/';
 const TOMB_DAYS = 120;
 
@@ -141,6 +141,8 @@ const order = {
   memos: (a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1),
   shop: (a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1),
   money: (a, b) => a.at - b.at || (a.id < b.id ? -1 : 1),
+  recs: (a, b) => a.at - b.at || (a.id < b.id ? -1 : 1),
+  maps: (a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1),
 };
 
 const sortedObject = (obj) => Object.fromEntries(Object.entries(obj ?? {}).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
@@ -159,6 +161,8 @@ export function shared(state) {
     memos: [...(state.memos ?? [])].sort(order.memos).map(strip),
     shop: [...(state.shop ?? [])].sort(order.shop).map(strip),
     money: [...(state.money ?? [])].sort(order.money).map(strip),
+    recs: [...(state.recs ?? [])].sort(order.recs).map(strip),
+    maps: [...(state.maps ?? [])].sort(order.maps).map(strip),
     notes: sortedObject(state.notes),
     notesAt: sortedObject(state.notesAt),
     focusLog: sortedObject(state.focusLog),
@@ -276,6 +280,8 @@ export const DATA_GUIDE = `# แปะไว้ — ข้อมูล
 - \`memos\`: โน้ตย่อ \`{ id, text, pinned, createdAt, updatedAt }\`
 - \`shop\`: ของต้องซื้อ \`{ id, text, cat, done, doneAt, createdAt, updatedAt }\`
 - \`money\`: รายจ่าย \`{ id, text, amount (บาท), cat, at, updatedAt }\`
+- \`recs\`: บันทึกเสียง \`{ id, title, at, durationMs, transcript, summary, mapId, device }\` (ไฟล์เสียงอยู่ในเครื่องที่อัด ไม่อยู่ใน repo)
+- \`maps\`: มายด์แมป \`{ id, nodes: [{ id, parent, text }], source, createdAt, updatedAt }\` โหนดที่ \`parent: null\` คือหัวข้อกลาง
 - \`notes\`: บันทึกประจำวัน \`{ "YYYY-MM-DD": "ข้อความ" }\` และ \`notesAt\` เวลาที่แก้ล่าสุดของแต่ละวัน
 - \`focusLog\`: เวลาโฟกัสต่อวัน (มิลลิวินาที) · \`settings\`: ค่าที่ใช้ร่วมกัน เช่น \`budget\` (งบต่อเดือน)
 - \`tomb\`: \`{ id: เวลาที่ลบ }\` ของที่ถูกลบ เพื่อไม่ให้เครื่องอื่นเอากลับมา

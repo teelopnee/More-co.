@@ -7,6 +7,7 @@
 import { addDays, describeWhen, longDate, repeatLabel } from './dates.js';
 import { KIND_LABELS } from './sort.js';
 import { moneySummary, sortedMemos, taskViews } from './store.js';
+import { sanitizeMap } from './mindmap.js';
 
 export const CLAUDE_KEY = 'paewai:claude';
 export const MODELS = ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5'];
@@ -158,4 +159,85 @@ export function webPrompt(question, context) {
 export function webLink(prompt, max = 7000) {
   const url = `${CLAUDE_WEB}?q=${encodeURIComponent(prompt)}`;
   return url.length <= max ? url : CLAUDE_WEB;
+}
+
+// ---------------------------------------------------------------------------
+// A recording's transcript, a note or a journal day → title, summary, mind map, things to do
+
+export const NOTE_SYSTEM = `คุณช่วยสรุปบันทึกและการถอดเสียงของผู้ใช้คนไทยในแอป “แปะไว้” ให้อ่านง่ายและนำไปใช้ต่อได้ ตอบเป็นภาษาไทย
+ตอบเป็น JSON ตาม schema:
+- title: ชื่อเรื่องสั้น ๆ ไม่เกิน 60 ตัวอักษร
+- summary: สรุปใจความสำคัญ 3–8 ข้อ แต่ละข้อขึ้นต้นด้วย “- ” ตามด้วยประเด็นที่ตกลงกันหรือสิ่งที่ต้องจำ ถ้าเป็นการประชุมให้บอกข้อสรุปและใครรับผิดชอบอะไร
+- nodes: มายด์แมปแบบรายการโหนด { id, parent, text } โหนดแรกคือหัวข้อกลาง (parent เป็น "") กิ่งหลัก 3–7 กิ่ง ลึกไม่เกิน 3 ชั้น
+  ข้อความแต่ละโหนดสั้น กระชับ (ไม่เกิน 8 คำ) id เป็นตัวอักษรสั้น ๆ ไม่ซ้ำกัน และ parent ต้องเป็น id ที่มีอยู่
+- items: สิ่งที่ต้องทำหรือนัดหมายที่พูดถึงในบันทึก (ไม่เกิน 10) kind เป็น task/note/shop/money
+  text เขียนแบบที่คนพิมพ์ในแอป ขึ้นต้นด้วยวันเวลาถ้ามี เช่น “พรุ่งนี้ 09:00 ส่งสไลด์” “15/11 ประชุมทีม” ไม่มีก็ให้เป็น []
+ใช้เฉพาะข้อมูลในบันทึก อย่าเติมเนื้อหาที่ไม่มี`;
+
+const NODE = {
+  type: 'object',
+  properties: { id: { type: 'string' }, parent: { type: 'string' }, text: { type: 'string' } },
+  required: ['id', 'parent', 'text'],
+  additionalProperties: false,
+};
+
+export const NOTE_SCHEMA = {
+  type: 'object',
+  properties: {
+    title: { type: 'string' },
+    summary: { type: 'string' },
+    nodes: { type: 'array', items: NODE },
+    items: ANSWER_SCHEMA.properties.items,
+  },
+  required: ['title', 'summary', 'nodes', 'items'],
+  additionalProperties: false,
+};
+
+export function noteRequest({ model = DEFAULT_MODEL, kind = 'บันทึก', title = '', text, today = '' }) {
+  return {
+    model: MODELS.includes(model) ? model : DEFAULT_MODEL,
+    max_tokens: 16000,
+    system: NOTE_SYSTEM,
+    messages: [
+      {
+        role: 'user',
+        content: `${today ? `วันนี้คือ ${today}\n` : ''}ช่วยสรุปและทำมายด์แมปจาก${kind}นี้${title ? ` (“${title}”)` : ''}\n\n<${kind}>\n${text}\n</${kind}>`,
+      },
+    ],
+    // Summaries and mind maps of long recordings are worth a little more thought.
+    output_config: { effort: 'medium', format: { type: 'json_schema', schema: NOTE_SCHEMA } },
+    betas: ['server-side-fallback-2026-07-01'],
+    fallbacks: 'default',
+  };
+}
+
+/** → { title, summary, map, items, note } (map is null when Claude gave none). */
+export function readNote(message, now = Date.now()) {
+  if (message?.stop_reason === 'refusal') return { title: '', summary: '', map: null, items: [], note: 'Claude ไม่สรุปบันทึกนี้' };
+  const text = (message?.content ?? []).filter((b) => b.type === 'text').map((b) => b.text).join('');
+  let data = null;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    data = null;
+  }
+  const cut = message?.stop_reason === 'max_tokens' ? 'คำตอบยาวเกินไปเลยถูกตัด ลองอีกครั้ง' : '';
+  if (!data) return { title: '', summary: text.trim(), map: null, items: [], note: cut || 'อ่านคำตอบไม่ได้' };
+  const nodes = (Array.isArray(data.nodes) ? data.nodes : []).map((n) => ({ id: String(n.id ?? ''), parent: n.parent ? String(n.parent) : null, text: String(n.text ?? '') }));
+  const map = nodes.length ? sanitizeMap({ nodes, createdAt: now, updatedAt: now }) : null;
+  const items = readAnswer({ content: [{ type: 'text', text: JSON.stringify({ reply: '', items: data.items ?? [] }) }] }).items;
+  return { title: String(data.title ?? '').trim().slice(0, 120), summary: String(data.summary ?? '').trim(), map, items, note: cut };
+}
+
+/** For the Claude app (no key): asks for a summary and an outline that pastes straight into a mind map. */
+export function noteWebPrompt(text, kind = 'บันทึก') {
+  return `ช่วยสรุป${kind}นี้เป็นภาษาไทย แล้วทำมายด์แมปเป็นโครงร่าง markdown ในกล่องโค้ด แบบนี้:
+# หัวข้อกลาง
+- กิ่งหลัก
+  - กิ่งย่อย
+(กิ่งหลัก 3–7 กิ่ง ข้อความสั้น ๆ) ฉันจะคัดลอกโครงร่างไปวางในแอปแปะไว้ให้เป็นมายด์แมป
+
+<${kind}>
+${text}
+</${kind}>`;
 }

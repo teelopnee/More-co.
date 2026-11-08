@@ -5,5 +5,7 @@
     <string name="share_label">แปะไว้</string>
     <string name="service_label">แปะไว้ ที่ notch</string>
     <string name="service_description">แสดงแถบเล็ก ๆ รอบกล้องด้านบนจอ แตะหรือปัดลงเพื่อแปะเรื่องที่ค้างในหัวได้จากทุกแอป\n\nแปะไว้ใช้สิทธิ์นี้เพียงเพื่อวางแถบทับแถบสถานะ ไม่อ่าน ไม่เก็บ และไม่ส่งสิ่งที่อยู่บนจอไปที่ไหน</string>
+    <string name="record_label">อัดเสียง</string>
+    <string name="record_long">อัดเสียง แปะไว้</string>
     <string name="pill_description">แปะไว้ แตะเพื่อแปะเรื่องใหม่</string>
 </resources>

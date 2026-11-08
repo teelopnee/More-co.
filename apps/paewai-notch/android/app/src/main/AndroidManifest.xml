@@ -7,6 +7,10 @@
     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- Voice notes: the recorder runs as a foreground service so it keeps going with the screen off. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
 
     <application
         android:allowBackup="true"
@@ -26,7 +30,53 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
         </activity>
+
+        <!-- "อัดเสียง": starts/stops recording; its own icon so the side key or a routine can open it. -->
+        <activity
+            android:name=".RecordActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:icon="@mipmap/ic_record"
+            android:label="@string/record_long"
+            android:launchMode="singleTask"
+            android:noHistory="true"
+            android:taskAffinity="com.moreco.paewai.record"
+            android:theme="@style/Theme.Paewai.Invisible" />
+
+        <activity-alias
+            android:name=".RecordLauncher"
+            android:exported="true"
+            android:icon="@mipmap/ic_record"
+            android:label="@string/record_long"
+            android:targetActivity=".RecordActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <service
+            android:name=".RecorderService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
+
+        <service
+            android:name=".RecordTile"
+            android:exported="true"
+            android:icon="@drawable/ic_stat_mic"
+            android:label="@string/record_label"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.service.quicksettings.TOGGLEABLE_TILE"
+                android:value="true" />
+        </service>
 
         <activity
             android:name=".PanelActivity"

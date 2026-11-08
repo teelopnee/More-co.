@@ -297,7 +297,13 @@ public class NotchService extends AccessibilityService {
         String text = "";
         float progress = 0;
         long next = 60_000;
-        if (focus != null) {
+        if (RecorderService.recording()) {
+            long ms = RecorderService.elapsed();
+            boolean held = RecorderService.paused;
+            kind = held ? PillView.REC_PAUSED : PillView.REC;
+            text = vertical ? (held ? "II" : "●") : RecorderService.clock(ms);
+            next = held ? 60_000 : 1000 - ms % 1000 + 5;
+        } else if (focus != null) {
             long endsAt = focus.optLong("endsAt", 0);
             long total = Math.max(1, focus.optLong("totalMs", 0));
             if (endsAt > now) {
@@ -322,7 +328,7 @@ public class NotchService extends AccessibilityService {
             }
         }
         pill.setContent(kind, text, progress);
-        float wantWing = kind == PillView.TIMER ? WING_TIMER : kind == PillView.PAUSED ? WING_PAUSED : kind == PillView.COUNT ? WING_COUNT : WING_IDLE;
+        float wantWing = kind == PillView.TIMER || kind == PillView.REC || kind == PillView.REC_PAUSED ? WING_TIMER : kind == PillView.PAUSED ? WING_PAUSED : kind == PillView.COUNT ? WING_COUNT : WING_IDLE;
         if (vertical) wantWing = Math.min(wantWing, WING_COUNT);
         if (wantWing != targetWing) {
             targetWing = wantWing;

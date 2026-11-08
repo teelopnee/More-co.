@@ -16,4 +16,14 @@
         <item name="android:backgroundDimEnabled">false</item>
         <item name="android:windowLayoutInDisplayCutoutMode">always</item>
     </style>
+
+    <!-- RecordActivity: no screen, only the permission prompt when needed. -->
+    <style name="Theme.Paewai.Invisible" parent="android:Theme.DeviceDefault.DayNight">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowAnimationStyle">@null</item>
+        <item name="android:backgroundDimEnabled">false</item>
+        <item name="android:forceDarkAllowed">false</item>
+    </style>
 </resources>

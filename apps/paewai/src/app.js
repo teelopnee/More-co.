@@ -7,6 +7,9 @@ import { icsFileName, taskToICS } from './lib/ics.js';
 import * as Y from './lib/sync.js';
 import { GitHubRepo, explain } from './lib/github.js';
 import * as C from './lib/claude.js';
+import * as V from './lib/voice.js';
+import * as Mm from './lib/mindmap.js';
+import { MapView } from './mapview.js';
 
 const VERSION = 'dev';
 
@@ -182,6 +185,12 @@ function render() {
   renderNoteHead();
   renderMoney();
   renderFocus();
+  if (recview?.open) renderRecView();
+  if (mapDialog?.open && mapView && !mapView.editing?.isConnected) {
+    const m = state.maps.find((x) => x.id === mapId);
+    if (!m) mapDialog.close();
+    else if (m !== mapView.map) mapView.set(m);
+  }
   // Android app: the banner stays until notch access is on. Web: until dismissed.
   $('#setup-banner').hidden = android ? notchOn() : !!state.prefs.guideDone;
 }
@@ -803,6 +812,7 @@ function renderNotes() {
     renderSearch(q);
     return;
   }
+  renderVoiceLists();
   const memos = S.sortedMemos(state);
   $('#memo-count').textContent = countLabel(memos.length);
   $('#memos').innerHTML = memos.map(memoCard).join('');
@@ -817,7 +827,9 @@ function renderSearch(q) {
     part('โน้ตย่อ', r.memos.length ? `<div class="memos">${r.memos.map(memoCard).join('')}</div>` : '') +
     part('บันทึกประจำวัน', r.notes.length ? `<ul class="list">${r.notes.map((n) => `<li class="plain-row"><button type="button" class="row-btn" data-note-day="${n.day}"><strong>${esc(shortDate(n.day, today))}</strong><span>${esc(n.line)}</span></button></li>`).join('')}</ul>` : '') +
     part('ของต้องซื้อ', r.shop.length ? `<ul class="list shop-list">${r.shop.map(shopItem).join('')}</ul>` : '') +
-    part('รายจ่าย', r.money.length ? `<ul class="list">${r.money.map(moneyItem).join('')}</ul>` : '');
+    part('รายจ่าย', r.money.length ? `<ul class="list">${r.money.map(moneyItem).join('')}</ul>` : '') +
+    part('บันทึกเสียง', r.recs.length ? `<ul class="list">${r.recs.map(recRow).join('')}</ul>` : '') +
+    part('มายด์แมป', r.maps.length ? `<div class="map-cards">${r.maps.map(mapCard).join('')}</div>` : '');
   $('#search-results').innerHTML = html || `<p class="empty">ไม่เจอ “${esc(q)}”</p>`;
 }
 
@@ -1114,8 +1126,8 @@ taskDialog.addEventListener('close', () => {
 // Tap outside a dialog closes it.
 for (const dialog of $$('dialog')) {
   dialog.addEventListener('click', (e) => {
-    if (e.target === dialog) dialog.close();
-    if (e.target.closest('[data-close]')) dialog.close();
+    if (e.target === dialog && !dialog.classList.contains('full')) dialog.close();
+    if (e.target.closest('[data-close]') && e.target.closest('dialog') === dialog) dialog.close();
   });
 }
 
@@ -1432,6 +1444,11 @@ document.addEventListener('click', async (e) => {
     openClaude();
     return;
   }
+  if (item === 'record') {
+    menu.close();
+    startRecording();
+    return;
+  }
   if (item === 'guide') {
     menu.close();
     refreshMenu();
@@ -1575,6 +1592,7 @@ function handleLaunch() {
     const res = capture(parts.join(' '), { shared: true });
     if (res && !res.error) toast(`รับมาแล้ว: ${res.msg}`, { label: 'เลิกทำ', run: undo });
   }
+  if (params.get('record')) setTimeout(startRecording, 300);
   if (params.get('snooze')) snooze(params.get('snooze'));
   if (params.get('done')) markDone(params.get('done'));
   const v = params.get('view');
@@ -1966,12 +1984,16 @@ function saveClaudeCfg() {
   }
 }
 
-function openClaude(question = '') {
+function openClaude(question = '', { settings = false } = {}) {
   if (question) $('#claude-q').value = question;
   $('#claude-key').value = claudeCfg.key ?? '';
   $('#claude-model').value = C.MODELS.includes(claudeCfg.model) ? claudeCfg.model : C.DEFAULT_MODEL;
-  $('#claude-settings').open = false;
+  $('#stt-provider').value = sttProvider();
+  $('#stt-gemini').value = voiceCfg.geminiKey ?? '';
+  $('#stt-openai').value = voiceCfg.openaiKey ?? '';
+  $('#claude-settings').open = settings;
   if (!claudeDialog.open) claudeDialog.showModal();
+  if (settings) requestAnimationFrame(() => $('#claude-settings').scrollIntoView({ block: 'start', behavior: 'smooth' }));
   if (question && claudeCfg.key) askClaude();
 }
 
@@ -2125,6 +2147,970 @@ $('#claude-q').addEventListener('keydown', (e) => {
 });
 claudeDialog.addEventListener('close', () => asking?.abort());
 
+// ---------------------------------------------------------------------------
+// Voice notes (lib/voice.js): record → transcribe → Claude summary and mind map
+
+const readLocal = (key, fallback) => {
+  try {
+    return JSON.parse(localStorage.getItem(key) ?? 'null') ?? fallback;
+  } catch {
+    return fallback;
+  }
+};
+const writeLocal = (key, value) => {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // storage blocked
+  }
+};
+
+let voiceCfg = readLocal(V.VOICE_KEY, {}); // { provider, geminiKey, openaiKey } on this device only
+const sttProvider = () => (V.PROVIDERS[voiceCfg.provider] ? voiceCfg.provider : 'gemini');
+const sttKey = () => (sttProvider() === 'openai' ? voiceCfg.openaiKey : voiceCfg.geminiKey) ?? '';
+
+for (const [sel, field] of [
+  ['#stt-provider', 'provider'],
+  ['#stt-gemini', 'geminiKey'],
+  ['#stt-openai', 'openaiKey'],
+]) {
+  $(sel).addEventListener('change', (e) => {
+    voiceCfg = { ...voiceCfg, [field]: e.target.value.trim() };
+    writeLocal(V.VOICE_KEY, voiceCfg);
+    if (recview.open) renderRecView();
+  });
+}
+
+function recRow(r) {
+  const tags = [r.transcript ? 'ถอดแล้ว' : '', r.summary ? 'สรุปแล้ว' : '', r.mapId ? 'มายด์แมป' : ''].filter(Boolean);
+  const when = `${dayLabel(dayKey(new Date(r.at)), today)} ${timeOf(new Date(r.at))}`;
+  return `<li class="plain-row"><button type="button" class="row-btn rec-row" data-rec-id="${esc(r.id)}"><span class="rec-ico">${icon('i-mic')}</span><span class="mi"><span>${esc(r.title)}</span><small>${esc(when)}${r.durationMs ? ` · ${V.clock(r.durationMs)}` : ''}${tags.length ? ` · ${tags.join(' · ')}` : ''}</small></span>${icon('i-right')}</button></li>`;
+}
+
+function mapCard(m) {
+  const branches = Mm.childrenOf(m, Mm.rootOf(m).id).slice(0, 3).map((n) => n.text);
+  return `<button type="button" class="map-card" data-map-id="${esc(m.id)}"><span class="map-thumb">${icon('i-map')}</span><strong>${esc(Mm.titleOf(m))}</strong><small>${esc(branches.join(' · ') || 'ยังไม่มีกิ่ง')}</small><small class="faint">${m.nodes.length - 1} หัวข้อ · ${esc(ago(m.updatedAt))}</small></button>`;
+}
+
+function renderVoiceLists() {
+  const recs = S.sortedRecs(state);
+  $('#recs-head').hidden = !recs.length;
+  $('#rec-count').textContent = countLabel(recs.length);
+  $('#recs').innerHTML = recs.slice(0, 30).map(recRow).join('');
+  const maps = S.sortedMaps(state);
+  $('#maps-head').hidden = !maps.length;
+  $('#map-count').textContent = countLabel(maps.length);
+  $('#maps').innerHTML = maps.slice(0, 30).map(mapCard).join('');
+}
+
+// ---- recording ---------------------------------------------------------------
+
+const recDialog = $('#rec-dialog');
+let recorder = null;
+let recRaf = 0;
+let recLevel = 0;
+let recBars = [];
+let lastBar = 0;
+let cancelArmed = 0;
+
+/** The Android app records natively (keeps going with the screen off); same interface as V.Recorder. */
+class NativeRecorder {
+  constructor() {
+    this.native = true;
+    this.poll();
+  }
+  poll() {
+    try {
+      this.last = JSON.parse(android.recState());
+    } catch {
+      this.last = { state: 'idle' };
+    }
+    return this.last;
+  }
+  get state() {
+    return this.last.state === 'idle' ? 'stopped' : this.last.state;
+  }
+  get durationMs() {
+    return this.last.elapsedMs || 0;
+  }
+  get level() {
+    return Math.sqrt(this.last.level || 0);
+  }
+  pause() {
+    android.recPause();
+  }
+  resume() {
+    android.recResume();
+  }
+  async stop() {
+    const { id, at } = this.last;
+    const length = this.durationMs;
+    android.recStop();
+    for (let i = 0; i < 50; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      try {
+        const m = JSON.parse(android.recList()).find((x) => x.id === id);
+        if (m) return { ...m, origin: 'android' };
+      } catch {
+        break;
+      }
+    }
+    return { id, at, durationMs: length, mime: 'audio/mp4', parts: 0, origin: 'android' };
+  }
+}
+
+function showNativeRecorder() {
+  if (!recorder) recorder = new NativeRecorder();
+  recBars = [];
+  for (const d of $$('dialog[open]')) if (d !== recDialog) d.close();
+  if (!recDialog.open) recDialog.showModal();
+  renderRecState();
+  cancelAnimationFrame(recRaf);
+  const loop = () => {
+    if (!recorder?.native) return;
+    const before = recorder.state;
+    recorder.poll();
+    recLevel = recorder.level;
+    if (recorder.state !== before) renderRecState();
+    // Stopped from the notification, the tile or the side key: save it like the stop button.
+    if (recorder.state === 'stopped') {
+      stopRecording();
+      return;
+    }
+    drawRec();
+    recRaf = requestAnimationFrame(loop);
+  };
+  loop();
+}
+
+async function startRecording() {
+  if (recorder) {
+    if (!recDialog.open) recDialog.showModal();
+    return;
+  }
+  if (android?.recStart) {
+    let st = 'idle';
+    try {
+      st = JSON.parse(android.recState()).state;
+    } catch {
+      // older app
+    }
+    if (st === 'idle') {
+      const res = android.recStart();
+      if (res === 'permission') {
+        toast('อนุญาตไมโครโฟน แล้วแตะอัดเสียงอีกครั้ง');
+        return;
+      }
+      if (res !== 'ok') {
+        toast('เริ่มอัดเสียงไม่ได้');
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    showNativeRecorder();
+    return;
+  }
+  if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
+    toast('เบราว์เซอร์นี้อัดเสียงไม่ได้ ลองเปิดใน Chrome หรือ Safari');
+    return;
+  }
+  const rec = new V.Recorder({
+    id: S.uid(),
+    onlevel: (l) => (recLevel = l),
+    onstate: () => renderRecState(),
+    onerror: (m) => toast(m),
+  });
+  recorder = rec;
+  recBars = [];
+  for (const d of $$('dialog[open]')) if (d !== recDialog) d.close();
+  recDialog.showModal();
+  renderRecState();
+  try {
+    await rec.start();
+    navigator.storage?.persist?.().catch(() => {});
+  } catch (err) {
+    recorder = null;
+    recDialog.close();
+    toast(
+      err?.name === 'NotAllowedError'
+        ? 'ยังไม่ได้อนุญาตไมโครโฟน: แตะไอคอนข้างช่องที่อยู่เว็บ → สิทธิ์ → ไมโครโฟน → อนุญาต'
+        : err?.name === 'NotFoundError'
+          ? 'ไม่เจอไมโครโฟนในเครื่องนี้'
+          : 'เปิดไมโครโฟนไม่ได้ (แอปอื่นอาจใช้อยู่)',
+    );
+    return;
+  }
+  cancelAnimationFrame(recRaf);
+  const loop = () => {
+    drawRec();
+    recRaf = requestAnimationFrame(loop);
+  };
+  loop();
+}
+
+function renderRecState() {
+  const st = recorder?.state ?? 'idle';
+  recDialog.dataset.state = st;
+  $('#rec-badge span').textContent = st === 'paused' ? 'พักอยู่' : st === 'recording' ? 'กำลังอัด' : 'กำลังเริ่ม…';
+  const pause = $('[data-rec="pause"]');
+  pause.innerHTML = icon(st === 'paused' ? 'i-mic' : 'i-pause');
+  pause.setAttribute('aria-label', st === 'paused' ? 'อัดต่อ' : 'พัก');
+  pause.disabled = st !== 'recording' && st !== 'paused';
+}
+
+function drawRec() {
+  if (!recorder) return;
+  $('#rec-time').textContent = V.clock(recorder.durationMs);
+  const now = performance.now();
+  if (now - lastBar > 70) {
+    lastBar = now;
+    recBars.push(recorder.state === 'recording' ? recLevel : 0);
+    if (recBars.length > 400) recBars.shift();
+  }
+  const c = $('#rec-wave');
+  const dpr = devicePixelRatio || 1;
+  const w = c.clientWidth;
+  const h = c.clientHeight;
+  if (!w || !h) return;
+  if (c.width !== Math.round(w * dpr)) c.width = Math.round(w * dpr);
+  if (c.height !== Math.round(h * dpr)) c.height = Math.round(h * dpr);
+  const ctx = c.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  const step = 5;
+  const count = Math.floor(w / step);
+  const bars = recBars.slice(-count);
+  const color = getComputedStyle(recDialog).getPropertyValue('--wave').trim() || '#ff3b30';
+  bars.forEach((v, i) => {
+    const x = w - (bars.length - i) * step;
+    const bh = Math.max(3, Math.min(h * 0.9, Math.sqrt(v) * h * 0.9));
+    ctx.globalAlpha = 0.35 + 0.65 * (i / bars.length);
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.roundRect(x, (h - bh) / 2, 3, bh, 1.5);
+    ctx.fill();
+  });
+  ctx.globalAlpha = 1;
+}
+
+async function stopRecording() {
+  const rec = recorder;
+  if (!rec) return;
+  cancelAnimationFrame(recRaf);
+  const res = await rec.stop();
+  recorder = null;
+  recDialog.close();
+  const origin = res.origin ?? 'web';
+  if (res.durationMs < 800 || !res.parts) {
+    if (origin === 'android') android?.recDelete?.(res.id);
+    else await V.audio.remove(res.id).catch(() => {});
+    toast('สั้นเกินไป ไม่ได้เก็บไว้');
+    return;
+  }
+  if (state.recs.some((r) => r.id === res.id)) {
+    openRec(res.id);
+    return;
+  }
+  const title = `บันทึกเสียง ${shortDate(dayKey(new Date(res.at)))} ${timeOf(new Date(res.at))}`;
+  commit(S.addRec(state, { id: res.id, title, at: res.at, durationMs: res.durationMs, mime: res.mime, parts: res.parts, device: deviceName(), origin }));
+  openRec(res.id);
+  if (sttKey()) transcribeRec(res.id);
+}
+
+recDialog.addEventListener('cancel', (e) => {
+  // Escape does not throw a recording away.
+  if (recorder) e.preventDefault();
+});
+
+recDialog.addEventListener('click', async (e) => {
+  const act = e.target.closest('[data-rec]')?.dataset.rec;
+  if (!act) return;
+  if (act === 'pause') {
+    if (recorder?.state === 'recording') recorder.pause();
+    else recorder?.resume();
+    buzz(10);
+  }
+  if (act === 'stop') {
+    buzz(15);
+    await stopRecording();
+  }
+  if (act === 'cancel') {
+    const button = e.target.closest('[data-rec]');
+    if (recorder && recorder.durationMs > 5000 && Date.now() - cancelArmed > 3000) {
+      cancelArmed = Date.now();
+      button.textContent = 'ทิ้งเลยไหม?';
+      setTimeout(() => (button.textContent = 'ยกเลิก'), 3000);
+      return;
+    }
+    button.textContent = 'ยกเลิก';
+    const rec = recorder;
+    recorder = null;
+    cancelAnimationFrame(recRaf);
+    recDialog.close();
+    if (rec) {
+      const res = await rec.stop();
+      if (res.origin === 'android') android?.recDelete?.(res.id);
+      else await V.audio.remove(res.id).catch(() => {});
+    }
+    toast('ไม่ได้เก็บเสียงนี้');
+  }
+});
+
+// ---- one recording ------------------------------------------------------------
+
+const recview = $('#recview');
+const player = new Audio();
+player.preload = 'metadata';
+let rvId = null;
+let rvTabName = 'text';
+let rvUrls = [];
+let rvPart = 0;
+let rvItems = [];
+let rvMapView = null;
+const busy = new Map(); // rec id → 'stt' | 'claude' (+ progress)
+
+const findRec = (id) => state.recs.find((r) => r.id === id);
+
+function openRec(id, tab = 'text') {
+  if (!findRec(id)) return;
+  if (rvId !== id) {
+    rvItems = [];
+    stopPlayer();
+  }
+  rvId = id;
+  rvTab(tab);
+  if (!recview.open) recview.showModal();
+  renderRecView();
+  loadPlayer();
+}
+
+function rvTab(name) {
+  rvTabName = name;
+  for (const b of $$('[data-rvtab]')) b.setAttribute('aria-selected', String(b.dataset.rvtab === name));
+  for (const p of $$('.rv-pane')) p.hidden = p.dataset.pane !== name;
+  if (name === 'map') renderRvMap();
+}
+
+function renderRecView() {
+  const r = findRec(rvId);
+  if (!r) {
+    if (recview.open) recview.close();
+    return;
+  }
+  if (document.activeElement !== $('#recview-title')) $('#recview-title').value = r.title;
+  $('#rv-meta').textContent = `${longDate(dayKey(new Date(r.at)))} · ${timeOf(new Date(r.at))} น.${r.durationMs ? ` · ${V.clock(r.durationMs)}` : ''}${r.device ? ` · อัดจาก ${r.device}` : ''}`;
+  // Transcript
+  const job = busy.get(r.id);
+  const hasText = !!r.transcript;
+  $('#rv-text-empty').hidden = hasText && job?.kind !== 'stt';
+  $('#rv-text').hidden = !hasText;
+  if (hasText && document.activeElement !== $('#rv-text')) $('#rv-text').value = r.transcript;
+  const p = V.PROVIDERS[sttProvider()];
+  $('#rv-stt-status').textContent =
+    job?.kind === 'stt'
+      ? `กำลังถอดเสียงด้วย ${p.name}${job.total > 1 ? ` (ส่วนที่ ${Math.min(job.done + 1, job.total)}/${job.total})` : ''}…`
+      : sttKey()
+        ? `ใช้ ${p.name} (${p.model}) · ส่งไฟล์เสียงไปถอดแล้วเก็บข้อความไว้ที่นี่`
+        : 'ยังไม่ได้ใส่คีย์บริการถอดเสียง แตะ “ตั้งค่าบริการ”';
+  $('[data-rv="transcribe"]').disabled = !!job;
+  $('[data-rv="transcribe"] span').textContent = job?.kind === 'stt' ? 'กำลังถอด…' : 'ถอดเสียง';
+  // Summary
+  const sum = $('#rv-sum');
+  $('#rv-sum-empty').hidden = !!r.summary && job?.kind !== 'claude';
+  $('[data-rv="analyze"]').disabled = !!job;
+  $('[data-rv="analyze"] span').textContent = job?.kind === 'claude' ? 'Claude กำลังสรุป…' : r.summary ? 'สรุปใหม่' : 'สรุปด้วย Claude';
+  sum.hidden = !r.summary;
+  if (r.summary) {
+    const now = Date.now();
+    const rows = rvItems.map((it, i) => {
+      const c = classify(it.text, now, { force: it.kind });
+      const when = c.kind === 'task' && c.day ? describeWhen(c.day, c.time, today) : '';
+      return `<li><label><input type="checkbox" data-i="${i}" checked><span class="kind-chip small k-${c.kind === 'task' && c.day ? 'remind' : c.kind}">${esc(KIND_NAMES[c.kind])}</span><span class="suggest-text">${esc(c.text)}${when ? ` <em>${esc(when)}</em>` : ''}</span></label></li>`;
+    });
+    sum.innerHTML =
+      `<div class="answer">${miniMarkdown(r.summary)}</div>` +
+      (rows.length ? `<div class="suggest"><p class="suggest-title">สิ่งที่ต้องทำจากบันทึกนี้</p><ul>${rows.join('')}</ul><button type="button" class="primary" data-rv="add-items">แปะที่เลือก</button></div>` : '') +
+      `<div class="sheet-buttons"><button type="button" class="secondary" data-rv="analyze-again">สรุปใหม่</button><button type="button" class="secondary" data-rv="copy-sum">คัดลอก</button></div>`;
+  }
+  // Mind map
+  const map = state.maps.find((m) => m.id === r.mapId);
+  $('#rv-map-label').textContent = map ? 'เปิดมายด์แมป' : 'ให้ Claude ทำมายด์แมป';
+  $('[data-rv="outline-map"]').hidden = !!map || !(r.summary || r.transcript);
+  if (rvTabName === 'map') renderRvMap();
+}
+
+function renderRvMap() {
+  const r = findRec(rvId);
+  const map = r && state.maps.find((m) => m.id === r.mapId);
+  const host = $('#rv-map');
+  host.classList.toggle('empty', !map);
+  if (!map) {
+    rvMapView?.destroy();
+    rvMapView = null;
+    host.innerHTML = `<p class="dim">${r?.transcript ? 'ยังไม่มีมายด์แมป ให้ Claude ทำจากข้อความที่ถอดได้ หรือทำจากสรุป' : 'ถอดเสียงก่อน แล้วค่อยทำมายด์แมป'}</p>`;
+    return;
+  }
+  if (!rvMapView) {
+    host.innerHTML = '';
+    rvMapView = new MapView(host, { editable: false });
+  }
+  rvMapView.set(map, { fit: true });
+  requestAnimationFrame(() => rvMapView?.fit(16));
+}
+
+// Audio: the parts saved on this device (or in the Android app), played one after another.
+async function audioParts(r) {
+  if (r.origin === 'android' && android?.recUrl) {
+    const blobs = [];
+    for (let i = 0; i < r.parts; i++) {
+      const res = await fetch(android.recUrl(r.id, i));
+      if (res.ok) blobs.push(await res.blob());
+    }
+    return blobs;
+  }
+  return V.audio.parts(r.id).catch(() => []);
+}
+
+function stopPlayer() {
+  player.pause();
+  for (const u of rvUrls) URL.revokeObjectURL(u);
+  rvUrls = [];
+  rvPart = 0;
+  updatePlayer();
+}
+
+async function loadPlayer() {
+  const r = findRec(rvId);
+  if (!r || rvUrls.length) return;
+  const blobs = await audioParts(r);
+  if (rvId !== r.id) return;
+  rvUrls = blobs.map((b) => URL.createObjectURL(b));
+  $('#rv-player').hidden = !rvUrls.length;
+  $('#rv-away').hidden = !!rvUrls.length;
+  $('#rv-away').textContent = r.device && r.device !== deviceName() ? `ไฟล์เสียงอยู่ใน ${r.device} (ข้อความ สรุป และมายด์แมปซิงก์มาให้แล้ว)` : 'ไม่มีไฟล์เสียงในเครื่องนี้';
+  if (rvUrls.length) setPart(0, 0);
+}
+
+const partLen = (r, i) => (i < r.parts - 1 ? V.PART_MS : Math.max(0, (r.durationMs || 0) - V.PART_MS * (r.parts - 1)));
+
+function setPart(i, offsetMs) {
+  rvPart = i;
+  player.src = rvUrls[i];
+  player.playbackRate = Number(player.dataset.rate || 1);
+  const seek = () => {
+    // MediaRecorder WebM files may not know their length until read once: nudge the browser.
+    if (player.duration === Infinity) {
+      player.currentTime = 1e101;
+      player.addEventListener('durationchange', () => (player.currentTime = offsetMs / 1000), { once: true });
+    } else player.currentTime = offsetMs / 1000;
+  };
+  player.addEventListener('loadedmetadata', seek, { once: true });
+}
+
+function totalMs() {
+  const r = findRec(rvId);
+  return r?.durationMs || (Number.isFinite(player.duration) ? player.duration * 1000 : 0);
+}
+
+function positionMs() {
+  const r = findRec(rvId);
+  if (!r) return 0;
+  let before = 0;
+  for (let i = 0; i < rvPart; i++) before += partLen(r, i);
+  return before + (player.currentTime || 0) * 1000;
+}
+
+function updatePlayer() {
+  const t = totalMs();
+  const pos = Math.min(positionMs(), t || Infinity);
+  $('#rv-pos').textContent = V.clock(pos);
+  $('#rv-dur').textContent = V.clock(t);
+  if (document.activeElement !== $('#rv-seek')) $('#rv-seek').value = t ? String(Math.round((pos / t) * 1000)) : '0';
+  const playing = !player.paused;
+  $('[data-rv="play"]').innerHTML = icon(playing ? 'i-pause' : 'i-play');
+  $('[data-rv="play"]').setAttribute('aria-label', playing ? 'หยุดเล่น' : 'เล่น');
+}
+
+player.addEventListener('timeupdate', updatePlayer);
+player.addEventListener('play', updatePlayer);
+player.addEventListener('pause', updatePlayer);
+player.addEventListener('ended', () => {
+  if (rvPart < rvUrls.length - 1) {
+    setPart(rvPart + 1, 0);
+    player.play().catch(() => {});
+  } else updatePlayer();
+});
+$('#rv-seek').addEventListener('input', (e) => {
+  const r = findRec(rvId);
+  if (!r || !rvUrls.length) return;
+  let target = (Number(e.target.value) / 1000) * totalMs();
+  let i = 0;
+  while (i < rvUrls.length - 1 && target > partLen(r, i)) target -= partLen(r, i++);
+  const playing = !player.paused;
+  if (i !== rvPart) {
+    setPart(i, target);
+    if (playing) player.play().catch(() => {});
+  } else player.currentTime = target / 1000;
+  updatePlayer();
+});
+
+recview.addEventListener('close', () => {
+  player.pause();
+  rvMapView?.destroy();
+  rvMapView = null;
+});
+
+$('#recview-title').addEventListener('change', (e) => {
+  const title = e.target.value.trim();
+  if (title && rvId) commit(S.editRec(state, rvId, { title }));
+});
+let rvTextTimer = 0;
+$('#rv-text').addEventListener('input', (e) => {
+  const id = rvId;
+  const text = e.target.value;
+  clearTimeout(rvTextTimer);
+  rvTextTimer = setTimeout(() => commit(S.editRec(state, id, { transcript: text }), { redraw: false }), 600);
+});
+
+async function transcribeRec(id) {
+  const r = findRec(id);
+  if (!r || busy.has(id)) return;
+  if (!sttKey()) {
+    openClaude('', { settings: true });
+    toast('ใส่คีย์บริการถอดเสียงก่อน (Gemini หรือ OpenAI)');
+    return;
+  }
+  const parts = await audioParts(r);
+  if (!parts.length) {
+    toast('ไม่มีไฟล์เสียงในเครื่องนี้ ถอดจากเครื่องที่อัดไว้');
+    return;
+  }
+  busy.set(id, { kind: 'stt', done: 0, total: parts.length });
+  renderRecView();
+  try {
+    const text = await V.transcribeParts({
+      provider: sttProvider(),
+      key: sttKey(),
+      parts,
+      mime: r.mime,
+      onprogress: (done, total) => {
+        busy.set(id, { kind: 'stt', done, total });
+        if (rvId === id) renderRecView();
+      },
+    });
+    busy.delete(id);
+    if (!text) {
+      toast('ไม่ได้ยินเสียงพูดในไฟล์นี้');
+      return;
+    }
+    commit(S.editRec(state, id, { transcript: text }));
+    toast('ถอดเสียงแล้ว');
+  } catch (err) {
+    toast(err?.message || 'ถอดเสียงไม่สำเร็จ');
+  } finally {
+    busy.delete(id);
+    if (rvId === id) renderRecView();
+  }
+}
+
+/** Claude: summary, things to do and a mind map from a transcript. */
+async function analyzeRec(id) {
+  const r = findRec(id);
+  if (!r || busy.has(id)) return;
+  if (!r.transcript) {
+    toast('ถอดเสียงก่อน แล้วค่อยสรุป');
+    rvTab('text');
+    return;
+  }
+  if (!claudeCfg.key) {
+    openClaude('', { settings: true });
+    toast('ใส่ Claude API key ก่อน หรือแตะ “เปิดใน Claude” แล้วนำคำตอบกลับมาวาง');
+    return;
+  }
+  busy.set(id, { kind: 'claude' });
+  renderRecView();
+  try {
+    const message = await claudeFinal(C.noteRequest({ model: claudeCfg.model, kind: 'การถอดเสียง', title: r.title, text: r.transcript, today: longDate(today) }));
+    const note = C.readNote(message);
+    if (note.note && !note.summary) throw new Error(note.note);
+    const cur = findRec(id);
+    let next = state;
+    let mapId = cur.mapId;
+    if (note.map) {
+      const old = state.maps.find((m) => m.id === mapId);
+      const map = { ...note.map, id: old?.id ?? note.map.id, source: { kind: 'rec', id }, createdAt: old?.createdAt ?? Date.now(), updatedAt: Date.now() };
+      next = S.saveMap(next, map);
+      mapId = map.id;
+    }
+    const autoTitle = /^บันทึกเสียง /.test(cur.title) && note.title;
+    next = S.editRec(next, id, { summary: note.summary, mapId, ...(autoTitle ? { title: note.title } : {}) });
+    rvItems = note.items;
+    commit(next);
+    toast(note.note || 'สรุปแล้ว พร้อมมายด์แมป');
+  } catch (err) {
+    toast(err?.message || 'สรุปไม่สำเร็จ');
+  } finally {
+    busy.delete(id);
+    if (rvId === id) renderRecView();
+  }
+}
+
+/** One Claude request through the official SDK; returns the final message. */
+async function claudeFinal(request) {
+  let Anthropic = null;
+  try {
+    ({ Anthropic } = await import('./vendor/anthropic.js'));
+    const client = new Anthropic({ apiKey: claudeCfg.key, dangerouslyAllowBrowser: true });
+    return await client.beta.messages.stream(request).finalMessage();
+  } catch (err) {
+    throw new Error(claudeError(err, Anthropic) || 'ยกเลิกแล้ว');
+  }
+}
+
+function openClaudeWeb(prompt, done) {
+  const link = C.webLink(prompt);
+  copyText(prompt, null);
+  const a = Object.assign(document.createElement('a'), { href: link, target: '_blank', rel: 'noopener' });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  toast(done ?? (link === C.CLAUDE_WEB ? 'คัดลอกคำถามแล้ว วางในแชตของ Claude ได้เลย' : 'เปิด Claude แล้ว (คัดลอกคำถามไว้ให้ด้วย)'));
+}
+
+/** A map from the summary (or the transcript) without AI: each line or sentence becomes a branch. */
+function outlineMapFor(r) {
+  const title = r.title.replace(/^บันทึกเสียง\s*/, '') || 'บันทึกเสียง';
+  const source = r.summary || r.transcript.split(/(?<=[.!?…])\s+|\n+/).filter((l) => l.trim().length > 3).slice(0, 12).map((l) => `- ${l.trim().slice(0, 80)}`).join('\n');
+  return { ...Mm.fromOutline(source, title), source: { kind: 'rec', id: r.id } };
+}
+
+let rvDeleteArmed = 0;
+recview.addEventListener('click', async (e) => {
+  const tab = e.target.closest('[data-rvtab]')?.dataset.rvtab;
+  if (tab) {
+    rvTab(tab);
+    return;
+  }
+  const act = e.target.closest('[data-rv]')?.dataset.rv;
+  const r = findRec(rvId);
+  if (!act || !r) return;
+  if (act === 'play') {
+    if (!rvUrls.length) return;
+    if (player.paused) player.play().catch(() => toast('เล่นไฟล์นี้ไม่ได้'));
+    else player.pause();
+  }
+  if (act === 'speed') {
+    const rates = [1, 1.25, 1.5, 2, 0.75];
+    const next = rates[(rates.indexOf(Number(player.dataset.rate || 1)) + 1) % rates.length];
+    player.dataset.rate = String(next);
+    player.playbackRate = next;
+    e.target.closest('[data-rv]').textContent = `${next}×`;
+  }
+  if (act === 'transcribe') transcribeRec(r.id);
+  if (act === 'settings') openClaude('', { settings: true });
+  if (act === 'analyze' || act === 'analyze-again') analyzeRec(r.id);
+  if (act === 'web') {
+    if (!r.transcript) {
+      toast('ถอดเสียงก่อน แล้วค่อยส่งให้ Claude');
+      return;
+    }
+    openClaudeWeb(C.noteWebPrompt(r.transcript, 'การถอดเสียง'), 'เปิด Claude แล้ว ได้โครงร่างกลับมาให้วางในมายด์แมป (⋮ → วางโครงร่าง)');
+  }
+  if (act === 'copy-sum') copyText(r.summary);
+  if (act === 'add-items') {
+    const now = Date.now();
+    let next = state;
+    let n = 0;
+    for (const box of $$('#rv-sum input[data-i]:checked')) {
+      const it = rvItems[Number(box.dataset.i)];
+      if (!it) continue;
+      const c = classify(it.text, now, { force: it.kind });
+      if (c.kind === 'money' && !c.amount) continue;
+      next = route(next, c, now + n++);
+    }
+    if (!n) return;
+    rvItems = [];
+    commit(next, { undoable: true });
+    toast(`แปะ ${n} เรื่องจากบันทึกนี้แล้ว`, { label: 'เลิกทำ', run: undo });
+  }
+  if (act === 'open-map') {
+    const map = state.maps.find((m) => m.id === r.mapId);
+    if (map) openMap(map.id);
+    else analyzeRec(r.id);
+  }
+  if (act === 'outline-map') {
+    const map = outlineMapFor(r);
+    commit(S.editRec(S.saveMap(state, map), r.id, { mapId: map.id }));
+    openMap(map.id);
+  }
+  if (act === 'more') {
+    const menuEl = $('#rv-menu');
+    menuEl.querySelector('[data-rvm="share"]').hidden = !rvUrls.length;
+    menuEl.querySelector('[data-rvm="copy"]').hidden = !r.transcript;
+    menuEl.querySelector('[data-rvm="memo"]').hidden = !r.summary;
+    menuEl.showModal();
+  }
+});
+
+$('#rv-menu').addEventListener('click', async (e) => {
+  const act = e.target.closest('[data-rvm]')?.dataset.rvm;
+  const r = findRec(rvId);
+  if (!act || !r) {
+    if (e.target === $('#rv-menu')) $('#rv-menu').close();
+    return;
+  }
+  const button = e.target.closest('[data-rvm]');
+  if (act === 'delete') {
+    if (Date.now() - rvDeleteArmed > 3000) {
+      rvDeleteArmed = Date.now();
+      button.textContent = 'แตะอีกครั้งเพื่อลบ (ลบไฟล์เสียงด้วย)';
+      setTimeout(() => (button.textContent = 'ลบบันทึกนี้'), 3000);
+      return;
+    }
+    button.textContent = 'ลบบันทึกนี้';
+    $('#rv-menu').close();
+    recview.close();
+    stopPlayer();
+    commit(S.deleteRec(state, r.id));
+    if (r.origin === 'android') android?.recDelete?.(r.id);
+    else V.audio.remove(r.id).catch(() => {});
+    toast('ลบบันทึกเสียงแล้ว');
+    return;
+  }
+  $('#rv-menu').close();
+  if (act === 'copy') copyText(r.transcript);
+  if (act === 'memo') {
+    commit(S.addMemo(state, `${r.title}\n${r.summary}`), { undoable: true });
+    toast('เก็บสรุปเป็นโน้ตย่อแล้ว', { label: 'เลิกทำ', run: undo });
+  }
+  if (act === 'share') {
+    const blobs = await audioParts(r);
+    const files = blobs.map((b, i) => new File([b], `${r.title.replace(/[\\/:*?"<>|]/g, ' ')}${blobs.length > 1 ? ` (${i + 1})` : ''}.${V.extFor(r.mime || b.type)}`, { type: b.type }));
+    try {
+      if (navigator.canShare?.({ files })) await navigator.share({ files, title: r.title });
+      else
+        for (const f of files) {
+          const url = URL.createObjectURL(f);
+          Object.assign(document.createElement('a'), { href: url, download: f.name }).click();
+          setTimeout(() => URL.revokeObjectURL(url), 10_000);
+        }
+    } catch (err) {
+      if (err?.name !== 'AbortError') toast('แชร์ไม่ได้');
+    }
+  }
+});
+
+// ---- mind maps --------------------------------------------------------------
+
+const mapDialog = $('#map-dialog');
+let mapView = null;
+let mapId = null;
+
+function openMap(id) {
+  const map = state.maps.find((m) => m.id === id);
+  if (!map) return;
+  mapId = id;
+  $('#map-title').textContent = Mm.titleOf(map);
+  if (!mapDialog.open) mapDialog.showModal();
+  if (!mapView) {
+    mapView = new MapView($('#mm-host'), {
+      onChange: (m) => {
+        commit(S.saveMap(state, m), { redraw: false });
+        $('#map-title').textContent = Mm.titleOf(m);
+      },
+      onSelect: renderMapTools,
+    });
+  }
+  mapView.set(map, { fit: true });
+  requestAnimationFrame(() => {
+    mapView.fit(32, { readable: true });
+    mapView.svg.focus({ preventScroll: true });
+  });
+  renderMapTools(mapView.selected);
+}
+
+function renderMapTools(sel) {
+  const node = mapView?.map.nodes.find((n) => n.id === sel);
+  const root = node && node.parent == null;
+  $('[data-mm="sibling"]').disabled = !node;
+  $('[data-mm="edit"]').disabled = !node;
+  $('[data-mm="delete"]').disabled = !node || root;
+  $('[data-mm="fold"]').disabled = !node || !Mm.childrenOf(mapView.map, node.id).length;
+  $('[data-mm="fold"] span').textContent = node?.collapsed ? 'กาง' : 'พับ';
+}
+
+function newMindMap(title = 'หัวข้อหลัก', outline = '') {
+  const map = outline ? Mm.fromOutline(outline, title) : Mm.newMap(title);
+  commit(S.saveMap(state, map));
+  openMap(map.id);
+  if (!outline)
+    requestAnimationFrame(() => {
+      const root = Mm.rootOf(map).id;
+      mapView.select(root);
+      mapView.edit(root);
+    });
+}
+
+mapDialog.addEventListener('click', (e) => {
+  const act = e.target.closest('[data-mm]')?.dataset.mm;
+  if (!act || !mapView) return;
+  if (act === 'child') mapView.addChild();
+  if (act === 'sibling') mapView.addSibling();
+  if (act === 'edit') mapView.edit();
+  if (act === 'fold') mapView.toggle();
+  if (act === 'delete') mapView.remove();
+  if (act === 'fit') mapView.fit();
+  if (act === 'more') $('#mm-menu').showModal();
+});
+
+mapDialog.addEventListener('close', () => {
+  mapView?.editing?.blur();
+  mapId = null;
+  render();
+});
+
+$('#mm-menu').addEventListener('click', async (e) => {
+  const act = e.target.closest('[data-mmm]')?.dataset.mmm;
+  if (!act) {
+    if (e.target === $('#mm-menu')) $('#mm-menu').close();
+    return;
+  }
+  $('#mm-menu').close();
+  const map = state.maps.find((m) => m.id === mapId);
+  if (!map) return;
+  if (act === 'png') {
+    const blob = await mapView.png();
+    const name = `${Mm.titleOf(map).replace(/[\\/:*?"<>|]/g, ' ').slice(0, 60)}.png`;
+    if (android?.saveBase64) {
+      const reader = new FileReader();
+      reader.onload = () => android.saveBase64(name, String(reader.result).split(',')[1], 'image/png');
+      reader.readAsDataURL(blob);
+      return;
+    }
+    const file = new File([blob], name, { type: 'image/png' });
+    try {
+      if (navigator.canShare?.({ files: [file] })) await navigator.share({ files: [file], title: Mm.titleOf(map) });
+      else {
+        const url = URL.createObjectURL(file);
+        Object.assign(document.createElement('a'), { href: url, download: name }).click();
+        setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      }
+    } catch (err) {
+      if (err?.name !== 'AbortError') toast('บันทึกรูปไม่ได้');
+    }
+  }
+  if (act === 'copy') copyText(Mm.toOutline(map), 'คัดลอกโครงร่างแล้ว');
+  if (act === 'paste') {
+    $('#paste-form').outline.value = '';
+    $('#paste-dialog').showModal();
+  }
+  if (act === 'claude') {
+    if (!claudeCfg.key) {
+      openClaudeWeb(C.noteWebPrompt(Mm.toOutline(map), 'มายด์แมป'), 'เปิด Claude แล้ว ได้โครงร่างกลับมาให้ ⋮ → วางโครงร่าง');
+      return;
+    }
+    toast('Claude กำลังขยายความ…');
+    try {
+      const note = C.readNote(await claudeFinal(C.noteRequest({ model: claudeCfg.model, kind: 'มายด์แมป', text: Mm.toOutline(map), today: longDate(today) })));
+      if (!note.map) throw new Error(note.note || 'Claude ไม่ได้ส่งมายด์แมปกลับมา');
+      const next = { ...map, nodes: note.map.nodes, updatedAt: Date.now() };
+      commit(S.saveMap(state, next), { undoable: true });
+      mapView.set(next, { fit: true });
+      toast('ขยายความแล้ว', { label: 'เลิกทำ', run: () => (undo(), mapView.set(state.maps.find((m) => m.id === map.id), { fit: true })) });
+    } catch (err) {
+      toast(err?.message || 'ไม่สำเร็จ');
+    }
+  }
+  if (act === 'delete') {
+    mapDialog.close();
+    commit(S.deleteMap(state, map.id), { undoable: true });
+    toast('ลบมายด์แมปแล้ว', { label: 'เลิกทำ', run: undo });
+  }
+});
+
+$('#paste-form').addEventListener('submit', () => {
+  const text = $('#paste-form').outline.value;
+  const map = state.maps.find((m) => m.id === mapId);
+  if (!map || !text.trim()) return;
+  const fresh = Mm.fromOutline(text, Mm.titleOf(map));
+  const next = { ...map, nodes: fresh.nodes, updatedAt: Date.now() };
+  commit(S.saveMap(state, next), { undoable: true });
+  mapView.set(next, { fit: true });
+  toast('ใช้โครงร่างนี้แล้ว', { label: 'เลิกทำ', run: () => (undo(), mapView.set(state.maps.find((m) => m.id === map.id), { fit: true })) });
+});
+
+// ---- entry points --------------------------------------------------------------
+
+$('#view-notes').addEventListener('click', (e) => {
+  const create = e.target.closest('[data-create]')?.dataset.create;
+  if (create === 'record') startRecording();
+  if (create === 'map') newMindMap();
+  const rec = e.target.closest('[data-rec-id]')?.dataset.recId;
+  if (rec) openRec(rec);
+  const map = e.target.closest('[data-map-id]')?.dataset.mapId;
+  if (map) openMap(map);
+});
+$('#search-results').addEventListener('click', (e) => {
+  const rec = e.target.closest('[data-rec-id]')?.dataset.recId;
+  if (rec) openRec(rec);
+  const map = e.target.closest('[data-map-id]')?.dataset.mapId;
+  if (map) openMap(map);
+});
+
+/** Recordings made by the Android app while the page was closed (tile, side key, notification). */
+function syncNativeRecordings() {
+  if (!android?.recList) return;
+  let list = [];
+  try {
+    list = JSON.parse(android.recList());
+  } catch {
+    return;
+  }
+  let next = state;
+  for (const m of list) {
+    if (next.recs.some((r) => r.id === m.id) || next.tomb?.[m.id]) continue;
+    next = S.addRec(next, { id: m.id, at: m.at, title: `บันทึกเสียง ${shortDate(dayKey(new Date(m.at)))} ${timeOf(new Date(m.at))}`, durationMs: m.durationMs, mime: m.mime, parts: m.parts, device: deviceName(), origin: 'android' });
+  }
+  if (next !== state) commit(next);
+  // Still recording (started from the tile or the side key): show it.
+  try {
+    if (!recorder && JSON.parse(android.recState()).state !== 'idle') showNativeRecorder();
+  } catch {
+    // older app
+  }
+}
+
+/** Recordings cut off by a crash or a closed tab: keep what was saved. */
+async function recoverRecordings() {
+  try {
+    const found = await V.audio.recover();
+    let next = state;
+    for (const m of found) {
+      if (next.recs.some((r) => r.id === m.id)) continue;
+      next = S.addRec(next, { id: m.id, at: m.at, title: `บันทึกเสียง ${shortDate(dayKey(new Date(m.at)))} ${timeOf(new Date(m.at))} (กู้คืน)`, mime: m.mime, parts: m.parts, device: deviceName(), origin: 'web' });
+    }
+    if (next !== state) {
+      commit(next);
+      toast(`กู้คืนการอัดเสียงที่ค้างไว้ ${found.length} รายการ`);
+    }
+  } catch {
+    // no IndexedDB here
+  }
+}
+
+// ---- keeping things safe ---------------------------------------------------------
+
+let lastCrashToast = 0;
+function onCrash(err) {
+  if (!err || ['AbortError', 'APIUserAbortError'].includes(err.name)) return;
+  console.error(err);
+  if (Date.now() - lastCrashToast < 60_000) return;
+  lastCrashToast = Date.now();
+  toast('มีบางอย่างสะดุด แต่ข้อมูลยังอยู่ครบ ถ้าหน้าจอแปลก ๆ ลองปิดแล้วเปิดใหม่');
+}
+addEventListener('error', (e) => onCrash(e.error));
+addEventListener('unhandledrejection', (e) => onCrash(e.reason));
+
 // Called by the Android app (MainActivity / PanelActivity).
 window.paewai = {
   reload() {
@@ -2134,6 +3120,12 @@ window.paewai = {
     updateHint();
     renderAndroid();
     scheduleSync(300);
+    syncNativeRecordings();
+  },
+  openRec(id) {
+    syncNativeRecordings();
+    setView('notes');
+    openRec(String(id));
   },
   focusCapture() {
     if (document.querySelector('dialog[open]')) return;
@@ -2173,6 +3165,8 @@ input.focus();
 checkPairLink();
 renderSyncStatus();
 scheduleSync(800);
+recoverRecordings();
+syncNativeRecordings();
 
 if (!android && 'serviceWorker' in navigator && location.protocol.startsWith('http')) {
   navigator.serviceWorker.register('sw.js').catch(() => {});

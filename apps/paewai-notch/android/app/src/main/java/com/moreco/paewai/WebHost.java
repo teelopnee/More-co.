@@ -49,7 +49,9 @@ final class WebHost {
             public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
                 Uri url = request.getUrl();
                 if (!HOST.equals(url.getHost())) return null;
-                return asset(activity, url.getPath());
+                String path = url.getPath();
+                if (path != null && path.startsWith("/rec/")) return recording(activity, path);
+                return asset(activity, path);
             }
 
             @Override
@@ -93,6 +95,23 @@ final class WebHost {
             InputStream in = a.getAssets().open("web" + path);
             WebResourceResponse r = new WebResourceResponse(mime(path), mime(path).startsWith("text/") || path.endsWith(".js") || path.endsWith(".webmanifest") ? "utf-8" : null, in);
             r.setResponseHeaders(Collections.singletonMap("Cache-Control", "no-cache"));
+            return r;
+        } catch (IOException e) {
+            return notFound();
+        }
+    }
+
+    /** /rec/<id>/<part>.m4a → a voice note saved by RecorderService. */
+    private static WebResourceResponse recording(Activity a, String path) {
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("^/rec/([a-z0-9]{4,40})/(\\d{1,3})\\.m4a$").matcher(path);
+        if (!m.matches()) return notFound();
+        java.io.File f = RecorderService.part(a, m.group(1), Integer.parseInt(m.group(2)));
+        try {
+            WebResourceResponse r = new WebResourceResponse("audio/mp4", null, new java.io.FileInputStream(f));
+            java.util.Map<String, String> headers = new java.util.HashMap<>();
+            headers.put("Cache-Control", "no-store");
+            headers.put("Content-Length", String.valueOf(f.length()));
+            r.setResponseHeaders(headers);
             return r;
         } catch (IOException e) {
             return notFound();

@@ -1,15 +1,18 @@
 package com.moreco.paewai;
 
+import android.Manifest;
 import android.app.Activity;
 import android.content.ActivityNotFoundException;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.CalendarContract;
 import android.provider.Settings;
+import android.util.Base64;
 import android.view.inputmethod.InputMethodManager;
 import android.webkit.JavascriptInterface;
 
@@ -23,6 +26,10 @@ final class Bridge {
         void dismiss();
 
         void saveDocument(String name, String text, String mime);
+
+        /** A binary file (a mind map picture). The panel has no file picker of its own. */
+        default void saveBytes(String name, byte[] bytes, String mime) {
+        }
     }
 
     private final Activity activity;
@@ -139,6 +146,90 @@ final class Bridge {
             InputMethodManager imm = activity.getSystemService(InputMethodManager.class);
             if (imm != null) imm.showSoftInput(host.web, InputMethodManager.SHOW_IMPLICIT);
         });
+    }
+
+    // ---- voice notes (RecorderService) ------------------------------------------
+
+    /** "ok", or "permission" when the microphone has to be allowed first (the prompt is shown). */
+    @JavascriptInterface
+    public String recStart() {
+        if (activity.checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            ui.post(() -> activity.requestPermissions(new String[] {Manifest.permission.RECORD_AUDIO}, 41));
+            return "permission";
+        }
+        try {
+            activity.startForegroundService(RecorderService.intent(activity, RecorderService.START));
+            return "ok";
+        } catch (RuntimeException e) {
+            return "error";
+        }
+    }
+
+    @JavascriptInterface
+    public void recPause() {
+        send(RecorderService.PAUSE);
+    }
+
+    @JavascriptInterface
+    public void recResume() {
+        send(RecorderService.RESUME);
+    }
+
+    @JavascriptInterface
+    public void recStop() {
+        send(RecorderService.STOP);
+    }
+
+    /** { state: idle|recording|paused, id, elapsedMs, level } */
+    @JavascriptInterface
+    public String recState() {
+        JSONObject o = new JSONObject();
+        try {
+            String id = RecorderService.id;
+            o.put("state", id == null ? "idle" : RecorderService.paused ? "paused" : "recording");
+            o.put("id", id == null ? "" : id);
+            o.put("at", RecorderService.startedAt);
+            o.put("elapsedMs", RecorderService.elapsed());
+            o.put("level", RecorderService.level());
+        } catch (Exception ignored) {
+            // JSONObject.put only throws for NaN
+        }
+        return o.toString();
+    }
+
+    /** Finished recordings on this tablet: [{ id, at, durationMs, parts, mime }]. */
+    @JavascriptInterface
+    public String recList() {
+        return RecorderService.list(activity).toString();
+    }
+
+    /** Where the page can fetch a part of a recording. */
+    @JavascriptInterface
+    public String recUrl(String id, int part) {
+        return WebHost.ORIGIN + "/rec/" + id + "/" + part + ".m4a";
+    }
+
+    @JavascriptInterface
+    public void recDelete(String id) {
+        RecorderService.delete(activity, id);
+    }
+
+    @JavascriptInterface
+    public void saveBase64(String name, String data, String mime) {
+        try {
+            byte[] bytes = Base64.decode(data, Base64.DEFAULT);
+            ui.post(() -> owner.saveBytes(name, bytes, mime));
+        } catch (IllegalArgumentException ignored) {
+            // not base64
+        }
+    }
+
+    private void send(String action) {
+        try {
+            activity.startService(RecorderService.intent(activity, action));
+        } catch (RuntimeException ignored) {
+            // the service is gone
+        }
     }
 
     private boolean start(Intent i) {

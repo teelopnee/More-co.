@@ -33,12 +33,16 @@ final class PillView extends View {
     static final int COUNT = 1;
     static final int TIMER = 2;
     static final int PAUSED = 3;
+    /** Recording a voice note: a red dot and the time, like the status bar of a phone that records. */
+    static final int REC = 4;
+    static final int REC_PAUSED = 5;
 
     private static final int NOTE = 0xFFFFD43B;
     private static final int NOTE_FOLD = 0xFFE0A800;
     private static final int BLUE = 0xFF3E91FF;
     private static final int ORANGE = 0xFFFF9F0A;
     private static final int GREY = 0xFF8E8E93;
+    private static final int RED = 0xFFFF453A;
     private static final int TRACK = 0xFF2C2C2E;
 
     private final float dp;
@@ -218,7 +222,13 @@ final class PillView extends View {
 
     private void drawLeft(Canvas canvas, float[] c) {
         float x = c[0], y = c[1];
-        if (kind == TIMER || kind == PAUSED) {
+        if (kind == REC || kind == REC_PAUSED) {
+            paint.setColor(kind == REC ? RED : GREY);
+            // a slow blink while recording (the service redraws every second)
+            paint.setAlpha(kind == REC && (System.currentTimeMillis() / 1000) % 2 == 1 ? 140 : 255);
+            canvas.drawCircle(x, y, 5f * dp, paint);
+            paint.setAlpha(255);
+        } else if (kind == TIMER || kind == PAUSED) {
             float rad = 7.5f * dp;
             rect.set(x - rad, y - rad, x + rad, y + rad);
             ring.setColor(TRACK);
@@ -258,7 +268,7 @@ final class PillView extends View {
             canvas.drawRoundRect(rect, h / 2, h / 2, paint);
         } else {
             label.setTextSize(sp(vertical ? 11 : 13.5f));
-            label.setColor(kind == TIMER ? ORANGE : GREY);
+            label.setColor(kind == TIMER ? ORANGE : kind == REC ? RED : GREY);
         }
         Paint.FontMetrics fm = label.getFontMetrics();
         canvas.drawText(text, x, y - (fm.ascent + fm.descent) / 2f, label);

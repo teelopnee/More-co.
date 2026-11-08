@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="record"
+        android:enabled="true"
+        android:icon="@mipmap/ic_record"
+        android:shortcutShortLabel="@string/record_label"
+        android:shortcutLongLabel="@string/record_long">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.moreco.paewai"
+            android:targetClass="com.moreco.paewai.RecordLauncher" />
+    </shortcut>
+</shortcuts>

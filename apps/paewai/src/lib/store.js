@@ -3,6 +3,7 @@
 
 import { addDays, dayKey, diffDays, isRepeat, nextOccurrence, toTimestamp } from './dates.js';
 import { MONEY_CATS, SHOP_SECTIONS, shopSection } from './sort.js';
+import { mapText, sanitizeMap } from './mindmap.js';
 
 export const STORAGE_KEY = 'paewai:v1';
 export const FOCUS_PRESETS = [5, 15, 25, 50];
@@ -15,6 +16,8 @@ export function emptyState() {
     memos: [],
     shop: [],
     money: [],
+    recs: [], // voice recordings: title, transcript, summary (the audio stays on the device that recorded it)
+    maps: [], // mind maps (lib/mindmap.js)
     focus: null,
     focusLog: {},
     prefs: {},
@@ -94,6 +97,32 @@ export function sanitize(raw) {
       at: when(e.at),
       updatedAt: Number.isFinite(e.updatedAt) ? e.updatedAt : Number.isFinite(e.at) ? e.at : 0,
     });
+  }
+  for (const r of Array.isArray(raw.recs) ? raw.recs : []) {
+    if (!r || typeof r !== 'object') continue;
+    const at = when(r.at);
+    state.recs.push({
+      id: freshId(r.id),
+      title: typeof r.title === 'string' && r.title.trim() ? r.title.trim().slice(0, 200) : 'บันทึกเสียง',
+      at,
+      durationMs: Number.isFinite(r.durationMs) && r.durationMs > 0 ? Math.round(r.durationMs) : 0,
+      mime: typeof r.mime === 'string' ? r.mime.slice(0, 60) : '',
+      parts: Number.isInteger(r.parts) && r.parts > 0 ? Math.min(r.parts, 100) : 1,
+      device: typeof r.device === 'string' ? r.device.slice(0, 40) : '',
+      origin: r.origin === 'android' ? 'android' : 'web',
+      transcript: typeof r.transcript === 'string' ? r.transcript.slice(0, 200_000) : '',
+      summary: typeof r.summary === 'string' ? r.summary.slice(0, 20_000) : '',
+      mapId: typeof r.mapId === 'string' ? r.mapId : null,
+      createdAt: when(r.createdAt ?? at),
+      updatedAt: Number.isFinite(r.updatedAt) ? r.updatedAt : at,
+    });
+  }
+  for (const m of Array.isArray(raw.maps) ? raw.maps : []) {
+    const map = sanitizeMap(m);
+    if (map && !ids.has(map.id)) {
+      ids.add(map.id);
+      state.maps.push(map);
+    }
   }
   if (raw.notes && typeof raw.notes === 'object') {
     for (const [k, v] of Object.entries(raw.notes)) if (isDay(k) && typeof v === 'string' && v) state.notes[k] = v;
@@ -459,7 +488,7 @@ export function moneySummary(state, today) {
 export function restoreFrom(state, backup) {
   let added = 0;
   const out = { ...state };
-  for (const list of ['tasks', 'memos', 'shop', 'money']) {
+  for (const list of ['tasks', 'memos', 'shop', 'money', 'recs', 'maps']) {
     const have = new Set(state[list].map((i) => i.id));
     const missing = backup[list].filter((i) => !have.has(i.id));
     added += missing.length;
@@ -477,13 +506,60 @@ export function restoreFrom(state, backup) {
 }
 
 // ---------------------------------------------------------------------------
+// Voice recordings and mind maps
+
+export function addRec(state, rec, now = Date.now()) {
+  const r = { title: 'บันทึกเสียง', durationMs: 0, mime: '', parts: 1, device: '', origin: 'web', transcript: '', summary: '', mapId: null, ...rec };
+  return { ...state, recs: [...state.recs, { ...r, id: r.id ?? uid(now), at: r.at ?? now, createdAt: now, updatedAt: now }] };
+}
+
+export function editRec(state, id, changes, now = Date.now()) {
+  const allowed = ['title', 'transcript', 'summary', 'mapId', 'durationMs', 'parts'];
+  return {
+    ...state,
+    recs: state.recs.map((r) => {
+      if (r.id !== id) return r;
+      const next = { ...r, updatedAt: now };
+      for (const k of allowed) if (k in changes) next[k] = changes[k];
+      if (typeof next.title !== 'string' || !next.title.trim()) next.title = r.title;
+      return next;
+    }),
+  };
+}
+
+export function deleteRec(state, id) {
+  return { ...state, recs: state.recs.filter((r) => r.id !== id) };
+}
+
+/** Newest first. */
+export const sortedRecs = (state) => [...state.recs].sort((a, b) => b.at - a.at);
+
+/** Adds a map or replaces the one with the same id. */
+export function saveMap(state, map) {
+  const has = state.maps.some((m) => m.id === map.id);
+  return { ...state, maps: has ? state.maps.map((m) => (m.id === map.id ? map : m)) : [...state.maps, map] };
+}
+
+export function deleteMap(state, id) {
+  return {
+    ...state,
+    maps: state.maps.filter((m) => m.id !== id),
+    recs: state.recs.map((r) => (r.mapId === id ? { ...r, mapId: null } : r)),
+  };
+}
+
+export const sortedMaps = (state) => [...state.maps].sort((a, b) => b.updatedAt - a.updatedAt);
+
+// ---------------------------------------------------------------------------
 // Search everything
 
 export function search(state, query) {
   const q = String(query ?? '').trim().toLowerCase();
-  if (!q) return { tasks: [], memos: [], notes: [], shop: [], money: [] };
+  if (!q) return { tasks: [], memos: [], notes: [], shop: [], money: [], recs: [], maps: [] };
   const has = (t) => String(t ?? '').toLowerCase().includes(q);
   return {
+    recs: sortedRecs(state).filter((r) => has(r.title) || has(r.transcript) || has(r.summary)).slice(0, 30),
+    maps: sortedMaps(state).filter((m) => has(mapText(m))).slice(0, 30),
     tasks: state.tasks.filter((t) => has(t.text)).slice(0, 50),
     memos: sortedMemos(state).filter((m) => has(m.text)).slice(0, 50),
     notes: Object.entries(state.notes)

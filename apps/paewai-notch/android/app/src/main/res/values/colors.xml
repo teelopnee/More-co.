@@ -2,4 +2,5 @@
 <resources>
     <color name="bg">#F7F5EF</color>
     <color name="icon_bg">#2B2A5C</color>
+    <color name="record_bg">#EF3B2F</color>
 </resources>

@@ -26,7 +26,7 @@ public class MainActivity extends Activity implements Bridge.Owner {
 
     private WebHost host;
     private ValueCallback<Uri[]> fileCallback;
-    private String pendingSave;
+    private byte[] pendingSave;
 
     @Override
     protected void onCreate(Bundle state) {
@@ -76,6 +76,8 @@ public class MainActivity extends Activity implements Bridge.Owner {
     private void handle(Intent intent) {
         String view = intent.getStringExtra("view");
         if (view != null) host.js("window.paewai&&paewai.show(" + JSONObject.quote(view) + ")");
+        String rec = intent.getStringExtra("rec");
+        if (rec != null) host.js("window.paewai&&paewai.openRec(" + JSONObject.quote(rec) + ")");
     }
 
     @Override
@@ -97,7 +99,12 @@ public class MainActivity extends Activity implements Bridge.Owner {
 
     @Override
     public void saveDocument(String name, String text, String mime) {
-        pendingSave = text;
+        saveBytes(name, text.getBytes(StandardCharsets.UTF_8), mime);
+    }
+
+    @Override
+    public void saveBytes(String name, byte[] bytes, String mime) {
+        pendingSave = bytes;
         Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType(mime).putExtra(Intent.EXTRA_TITLE, name);
         try {
             startActivityForResult(i, REQ_SAVE_FILE);
@@ -116,12 +123,12 @@ public class MainActivity extends Activity implements Bridge.Owner {
             fileCallback.onReceiveValue(uri == null ? null : new Uri[] {uri});
             fileCallback = null;
         } else if (requestCode == REQ_SAVE_FILE && pendingSave != null) {
-            String text = pendingSave;
+            byte[] bytes = pendingSave;
             pendingSave = null;
             if (uri == null) return;
             try (OutputStream out = getContentResolver().openOutputStream(uri)) {
-                out.write(text.getBytes(StandardCharsets.UTF_8));
-                host.js("window.paewai&&paewai.toast('บันทึกไฟล์สำรองแล้ว')");
+                out.write(bytes);
+                host.js("window.paewai&&paewai.toast('บันทึกไฟล์แล้ว')");
             } catch (Exception e) {
                 host.js("window.paewai&&paewai.toast('บันทึกไฟล์ไม่ได้')");
             }

@@ -26,6 +26,12 @@
       "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" }]
     },
     {
+      "name": "อัดเสียง",
+      "short_name": "อัดเสียง",
+      "url": "./?record=1",
+      "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
       "name": "โน้ตวันนี้",
       "url": "./?view=notes",
       "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" }]
