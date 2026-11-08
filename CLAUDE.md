@@ -12,6 +12,12 @@ computer and writes in Thai; reply in Thai.
     doctype/charset/viewport tags and the `[hidden] { display: none !important; }` rule.
   - `apps/paewai/`: แปะไว้, a no-dependency PWA "brain dump" for the Samsung tablet (Edge panel +
     pop-up window). Thai natural-language dates in `src/lib/dates.js`; `npm test`, `npm run build`.
+  - `apps/paewai-notch/`: the same แปะไว้ as an Android app (Java, Gradle in `android/`) with a pill
+    over the camera notch (accessibility overlay) and a drop-down panel; it bundles `../paewai/src`
+    into the APK, so web changes ship in both. `npm run build` needs Java 17+ and `ANDROID_HOME`
+    (CI has both; without an SDK it builds only the download page). Never commit a signing key:
+    the stable key comes from the `PAEWAI_KEYSTORE_B64` / `PAEWAI_KEYSTORE_PASSWORD` secrets; without
+    them the APK is a debug-signed preview that cannot install over an earlier build.
 - `docs/*.md`: design docs. `docs/odd-space-gdd.md` is the source of truth for the ODD-SPACE
   game (Godot 4); `docs/originals/*.docx` is a frozen copy, do not edit it.
 - `scripts/build-site.mjs`: installs, tests and builds every app into `_site/` and writes the

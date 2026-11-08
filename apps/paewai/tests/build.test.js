@@ -22,6 +22,7 @@ test('build output works from a sub-path and works offline', () => {
     assert.ok(refs.length >= 5);
     for (const ref of refs) {
       assert.ok(!ref.startsWith('/') && !/^https?:/.test(ref), `absolute URL in index.html: ${ref}`);
+      if (ref.startsWith('../')) continue; // a sibling app on the same site
       assert.ok(existsSync(join(out, ref)), `missing ${ref}`);
     }
 

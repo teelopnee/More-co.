@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>แปะไว้ ที่ notch</title>
+<meta name="description" content="แอป Android ของแปะไว้ มีแถบครอบกล้องด้านบนของ Galaxy Tab S Ultra แตะแล้วช่องแปะเลื่อนลงมาทับทุกแอป">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="icons/favicon.svg" type="image/svg+xml">
+<style>
+:root { --bg: #f7f5ef; --surface: #fff; --sunk: #efece3; --ink: #1d1b16; --dim: #6b665a; --line: #e4dfd2; --note: #ffd43b; --primary: #3b38a8; --warn: #b54708; }
+@media (prefers-color-scheme: dark) { :root { --bg: #16151a; --surface: #1f1e24; --sunk: #26252c; --ink: #f0eee8; --dim: #a8a499; --line: #322f36; --note: #f5c518; --primary: #a9a6ff; --warn: #fdb022; } }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 17px/1.6 system-ui, "Noto Sans Thai", "Leelawadee UI", sans-serif; }
+main { max-width: 720px; margin: 0 auto; padding: 28px 16px 56px; }
+header { display: flex; gap: 14px; align-items: center; }
+header img { width: 64px; height: 64px; border-radius: 16px; }
+h1 { margin: 0; font-size: 26px; line-height: 1.25; }
+h2 { margin: 30px 0 8px; font-size: 19px; }
+p { margin: 8px 0; }
+.dim { color: var(--dim); }
+.small { font-size: 14px; }
+.notch { position: relative; height: 150px; margin: 22px 0 6px; border-radius: 18px; background: linear-gradient(#2b2a5c, #44427e); overflow: hidden; }
+.notch .pill { position: absolute; top: 0; left: 50%; transform: translateX(-50%); width: 170px; height: 30px; border-radius: 0 0 16px 16px; background: #000; display: flex; align-items: center; justify-content: space-between; padding: 0 20px; color: #fff; font: 700 13px system-ui; }
+.notch .pill::after { content: ""; position: absolute; left: 50%; top: 8px; width: 13px; height: 13px; margin-left: -6.5px; border-radius: 50%; background: #1d1d2b; box-shadow: inset 0 0 0 3px #111; }
+.notch .pill i { width: 12px; height: 12px; border-radius: 2px; background: var(--note); transform: rotate(-7deg); }
+.notch .card { position: absolute; top: 40px; left: 50%; transform: translateX(-50%); width: min(82%, 380px); padding: 12px 14px; border-radius: 16px; background: var(--surface); color: var(--ink); box-shadow: 0 10px 30px rgb(0 0 0 / 30%); font-size: 15px; }
+.notch .card span { display: block; color: var(--dim); font-size: 13px; }
+.download { display: flex; align-items: center; justify-content: center; gap: 10px; min-height: 56px; margin: 18px 0 6px; border-radius: 14px; background: var(--primary); color: #fff; font-weight: 700; font-size: 19px; text-decoration: none; }
+@media (prefers-color-scheme: dark) { .download { color: #16151a; } }
+ol { padding-left: 24px; }
+li { margin: 10px 0; }
+li > span { display: block; color: var(--dim); font-size: 15px; }
+em { font-style: normal; font-weight: 600; color: var(--ink); }
+.box { margin: 14px 0; padding: 12px 14px; border-radius: 14px; background: var(--sunk); font-size: 15px; }
+.box.warn { border-left: 4px solid var(--warn); }
+.warn { color: var(--warn); font-weight: 600; }
+code { font-size: 12px; word-break: break-all; }
+a { color: var(--primary); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <img src="icons/icon-192.png" alt="">
+    <div>
+      <h1>แปะไว้ ที่ notch</h1>
+      <p class="dim">แอป Android สำหรับ Galaxy Tab S Ultra ที่มีรอยบากกล้อง</p>
+    </div>
+  </header>
+
+  <div class="notch" aria-hidden="true">
+    <div class="pill"><i></i><span>3</span></div>
+    <div class="card">พรุ่งนี้ 5 โมงเย็น โทรหาแม่<span>📅 พรุ่งนี้ 17:00 น.</span></div>
+  </div>
+
+  <p>แถบดำเล็ก ๆ ครอบกล้องด้านบนจออยู่ตลอด แตะหรือปัดลง ช่องแปะจะเลื่อนลงมาจาก notch ทับแอปที่ใช้อยู่
+    พิมพ์ กด Enter แตะข้างนอกเพื่อเก็บ ตัวเลขบนแถบคือเรื่องที่ต้องทำวันนี้ ตอนโฟกัสเป็นเวลาที่เหลือ
+    ถึงเวลาเตือน แถบจะขยายบอกพร้อมแจ้งเตือน แม้ปิดแอปอยู่</p>
+
+  <!--APK-->
+  <a class="download" href="paewai-notch.apk" download>ดาวน์โหลด APK ({{SIZE}})</a>
+  <p class="dim small">รุ่น {{VERSION}} · {{UPDATE}}</p>
+
+  <h2>ติดตั้ง</h2>
+  <ol>
+    <li><strong>ดาวน์โหลด</strong>
+      <span>เปิดหน้านี้บนแท็บเล็ต แตะปุ่มด้านบน ถ้า Chrome เตือนว่าไฟล์อาจเป็นอันตราย แตะ <em>ดาวน์โหลดต่อ</em></span></li>
+    <li><strong>ติดตั้ง</strong>
+      <span>แตะไฟล์ที่ดาวน์โหลดเสร็จ → <em>การตั้งค่า</em> → อนุญาตให้ Chrome ติดตั้งแอป → กลับมาแตะ <em>ติดตั้ง</em></span></li>
+    <li><strong>เปิดแถบที่ notch</strong>
+      <span>เปิดแอป แปะไว้ → ⋯ → <em>ตั้งค่าแถบที่ notch</em> → <em>ไปที่หน้าตั้งค่า</em> →
+        การช่วยเหลือการเข้าถึง → แอปที่ติดตั้ง → <em>แปะไว้ ที่ notch</em> → เปิด</span></li>
+    <li><strong>ถ้าสวิตช์กดไม่ได้ ขึ้นว่า “การตั้งค่าที่ถูกจำกัด”</strong>
+      <span>การตั้งค่า → แอป → แปะไว้ → ⋮ มุมขวาบน → <em>อนุญาตการตั้งค่าที่ถูกจำกัด</em> แล้วทำข้อ 3 อีกครั้ง</span></li>
+  </ol>
+
+  <div class="box warn">
+    <strong>ถ้าติดตั้งไม่ได้ ขึ้นว่าแอปถูกบล็อก</strong>
+    <p>Google Play Protect และ Samsung Auto Blocker บล็อกแอปที่ติดตั้งเองแล้วขอสิทธิ์การช่วยเหลือการเข้าถึง เพื่อกันแอปมิจฉาชีพ
+      ถ้าเจอ ให้ปิดชั่วคราวเฉพาะตอนติดตั้งไฟล์จากหน้านี้ แล้วเปิดกลับทันที:</p>
+    <p>Play Store → รูปโปรไฟล์ → <em>Play Protect</em> → ⚙ → ปิด <em>สแกนแอปด้วย Play Protect</em><br>
+      การตั้งค่า → ความปลอดภัยและความเป็นส่วนตัว → <em>Auto Blocker</em> → ปิด</p>
+    <p class="dim small">อย่าทำแบบนี้กับไฟล์ APK ที่ได้มาจากที่อื่น</p>
+  </div>
+
+  <h2>ทำไมต้องขอสิทธิ์การช่วยเหลือการเข้าถึง</h2>
+  <p>Android ให้แอปวางอะไรทับแถบสถานะ (ตรง notch) ได้เฉพาะผ่านสิทธิ์นี้ แปะไว้ใช้แค่เพื่อวางแถบ
+    ไม่อ่าน ไม่เก็บ และไม่ส่งสิ่งที่อยู่บนจอไปที่ไหน (ตั้งค่า <code>canRetrieveWindowContent="false"</code> ไว้)
+    งานทั้งหมดเก็บในเครื่องนี้เท่านั้น</p>
+
+  <h2>รู้ไว้</h2>
+  <ul>
+    <li>ข้อมูลในแอปนี้แยกจาก <a href="../paewai/">แปะไว้ฉบับเว็บ</a> ย้ายได้ด้วย ⋯ → สำรองข้อมูล แล้ว กู้คืน ในอีกฝั่ง</li>
+    <li>ดูวิดีโอหรือเล่นเกมเต็มจอ แถบจะพยายามหลบให้ (ปิดได้ในหน้าตั้งค่าแถบ)</li>
+    <li>กดค้างที่แถบ = เปิดแอปเต็ม (โน้ต โฟกัส สัปดาห์ข้างหน้า) · แชร์ข้อความจากแอปอื่นมาที่ แปะไว้ ได้</li>
+  </ul>
+
+  <p class="dim small">SHA-256: <code>{{SHA256}}</code></p>
+</main>
+</body>
+</html>

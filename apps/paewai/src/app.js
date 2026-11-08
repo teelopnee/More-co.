@@ -1,6 +1,6 @@
 // แปะไว้ — the UI. State lives in lib/store.js, Thai dates in lib/dates.js.
 
-import { addDays, dayKey, dayLabel, describeWhen, fromKey, longDate, parseWhen, shortDate, timeOf, toTimestamp } from './lib/dates.js';
+import { addDays, dayKey, dayLabel, describeWhen, fromKey, longDate, parseWhen, shortDate, toTimestamp } from './lib/dates.js';
 import * as S from './lib/store.js';
 import { icsFileName, taskToICS } from './lib/ics.js';
 
@@ -11,6 +11,13 @@ const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 const icon = (id) => `<svg aria-hidden="true"><use href="#${id}"/></svg>`;
 const URL_RE = /https?:\/\/[^\s<>"']+/i;
+
+// Inside the Android app (apps/paewai-notch) the page gets window.PaewaiAndroid, and the card
+// that drops from the notch loads it with ?mode=panel.
+const android = window.PaewaiAndroid ?? null;
+const mode = new URLSearchParams(location.search).get('mode') ?? '';
+document.documentElement.classList.toggle('android', !!android);
+document.documentElement.classList.toggle('panel', mode === 'panel');
 
 // ---------------------------------------------------------------------------
 // State
@@ -40,15 +47,95 @@ function save() {
   } catch {
     toast('บันทึกไม่ได้ ที่เก็บข้อมูลในเครื่องเต็มหรือถูกปิดไว้');
   }
+  syncAndroid();
 }
 
-/** Replace the state, save it, redraw. `undoable` keeps the old state for the toast's เลิกทำ. */
-function commit(next, { undoable = false, redraw = true } = {}) {
+/** Tells the Android app what the notch pill shows and which alarms to set. */
+function syncAndroid() {
+  if (!android) return;
+  const now = Date.now();
+  const reminders = state.tasks
+    .filter((t) => !t.done && t.day && t.time)
+    .map((t) => ({ id: t.id, at: toTimestamp(t.day, t.time), title: `ถึงเวลา ${t.time} น.`, text: t.text }))
+    .filter((r) => r.at > now);
+  const f = state.focus;
+  if (f?.endsAt) {
+    reminders.push({ id: 'focus', at: f.endsAt, title: 'ครบเวลาโฟกัส', text: f.label || 'พักสายตาหน่อย' });
+  }
+  const summary = {
+    openDays: state.tasks.filter((t) => !t.done && t.day).map((t) => t.day),
+    focus: f ? { endsAt: f.endsAt ?? 0, leftMs: f.leftMs ?? 0 } : null,
+    reminders,
+  };
+  try {
+    android.sync(JSON.stringify(summary));
+  } catch {
+    // the bridge is gone (page closing)
+  }
+}
+
+/** Resolves once the last redraw is in the DOM (it may run inside a view transition). */
+let rendered = Promise.resolve();
+const calm = matchMedia('(prefers-reduced-motion: reduce)');
+
+/**
+ * Names the tasks that are on screen, so the view transition moves them. Tasks scrolled out of a
+ * column stay unnamed: their snapshots would be drawn without the column's clipping.
+ */
+function nameVisible(on = true) {
+  const top = Math.max(0, $('.dock').getBoundingClientRect().bottom);
+  for (const li of $$('.task')) {
+    li.style.viewTransitionName = '';
+    if (!on || !/^[\w-]+$/.test(li.dataset.id)) continue;
+    const r = li.getBoundingClientRect();
+    if (!r.height) continue;
+    const col = li.closest('.col');
+    const head = col?.querySelector('.col-head')?.getBoundingClientRect();
+    const box = col?.getBoundingClientRect();
+    const from = Math.max(top, head && col.scrollHeight > col.clientHeight ? head.bottom : 0, 0);
+    const to = Math.min(innerHeight, box && col.scrollHeight > col.clientHeight ? box.bottom : innerHeight);
+    if (r.top >= from - 1 && r.bottom <= to + 1) li.style.viewTransitionName = `t-${li.dataset.id}`;
+  }
+}
+
+let transitions = 0;
+
+/** Runs a DOM update as a view transition: tasks glide to where they now belong. */
+function animated(update) {
+  if (!document.startViewTransition || calm.matches || document.visibilityState !== 'visible') {
+    update();
+    return Promise.resolve();
+  }
+  try {
+    const n = ++transitions;
+    nameVisible();
+    const t = document.startViewTransition(() => {
+      update();
+      nameVisible();
+    });
+    t.finished.finally(() => n === transitions && nameVisible(false));
+    return t.updateCallbackDone.catch(() => {});
+  } catch {
+    update();
+    return Promise.resolve();
+  }
+}
+
+/**
+ * Replace the state, save it, redraw. `undoable` keeps the old state for the toast's เลิกทำ;
+ * `animate` moves the tasks smoothly instead of jumping.
+ */
+function commit(next, { undoable = false, redraw = true, animate = false } = {}) {
   if (next === state) return;
   if (undoable) undoState = state;
   state = next;
   save();
-  if (redraw) render();
+  if (!redraw) return;
+  if (animate) rendered = animated(render);
+  else {
+    render();
+    rendered = Promise.resolve();
+  }
 }
 
 function undo() {
@@ -56,8 +143,17 @@ function undo() {
   state = undoState;
   undoState = null;
   save();
-  render();
+  rendered = animated(render);
   syncNote();
+}
+
+/** A short tick on devices that can vibrate. */
+function buzz(ms = 8) {
+  try {
+    navigator.vibrate?.(ms);
+  } catch {
+    // not allowed here
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -66,27 +162,91 @@ function undo() {
 function render() {
   today = dayKey(new Date());
   $('#today-label').textContent = shortDate(today);
+  renderHero();
   renderTasks();
   renderNoteHead();
   renderFocus();
-  $('#setup-banner').hidden = !!state.prefs.guideDone;
+  // Android app: the banner stays until notch access is on. Web: until dismissed.
+  $('#setup-banner').hidden = android ? notchOn() : !!state.prefs.guideDone;
+}
+
+/** Minutes from now until a task's time today (negative = already past). */
+function minutesUntil(t) {
+  return Math.round((toTimestamp(t.day, t.time) - Date.now()) / 60_000);
+}
+
+function inWords(mins) {
+  const m = Math.abs(mins);
+  if (m < 1) return 'ตอนนี้';
+  if (m < 60) return `${m} นาที`;
+  const h = Math.floor(m / 60);
+  return m % 60 ? `${h} ชม. ${m % 60} นาที` : `${h} ชม.`;
 }
 
 function taskItem(t, { withDay = false } = {}) {
   const overdue = !t.done && t.day && t.day < today;
-  const late = overdue || (!t.done && t.day === today && t.time && t.time <= timeOf(new Date()));
-  const meta = [];
-  if (withDay && t.day) meta.push(describeWhen(t.day, t.time, today));
-  else if (t.time) meta.push(`${t.time} น.`);
+  const timedToday = !t.done && t.day === today && t.time;
+  const mins = timedToday ? minutesUntil(t) : null;
+  const badges = [];
+  if (withDay && t.day) {
+    badges.push(`<span class="badge">${icon('i-cal')}${esc(describeWhen(t.day, t.time, today))}</span>`);
+  } else if (t.time) {
+    const tone = mins == null ? '' : mins <= 0 ? ' late' : mins <= 60 ? ' soon' : '';
+    badges.push(`<span class="badge time${tone}">${icon('i-clock')}${esc(t.time)}</span>`);
+  }
   if (overdue) {
     const label = dayLabel(t.day, today);
-    meta.push(label === 'เมื่อวาน' ? 'ค้างจากเมื่อวาน' : `ค้างจาก ${label}`);
+    badges.push(`<span class="badge late">${label === 'เมื่อวาน' ? 'ค้างจากเมื่อวาน' : `ค้างจาก ${esc(label)}`}</span>`);
   }
-  if (URL_RE.test(t.text)) meta.push('มีลิงก์');
-  return `<li class="task${t.done ? ' done' : ''}${late ? ' late' : ''}" data-id="${esc(t.id)}">
+  if (URL_RE.test(t.text)) badges.push(`<span class="badge">${icon('i-link')}ลิงก์</span>`);
+  const later = !t.day || t.day < today ? 'วันนี้' : 'วันถัดไป';
+  return `<li class="task${t.done ? ' done' : ''}" data-id="${esc(t.id)}">
+<div class="swipe" aria-hidden="true"><span class="s-done">${icon('i-check')}${t.done ? 'ยังไม่เสร็จ' : 'เสร็จ'}</span><span class="s-later">${later}${icon('i-arrow')}</span></div>
+<div class="row">
 <button type="button" class="check" data-action="toggle" role="checkbox" aria-checked="${t.done}" aria-label="เสร็จแล้ว: ${esc(t.text)}">${icon('i-check')}</button>
-<button type="button" class="body" data-action="open"><span class="text">${esc(t.text)}</span>${meta.length ? `<span class="meta">${esc(meta.join(' · '))}</span>` : ''}</button>
+<button type="button" class="body" data-action="open"><span class="text">${esc(t.text)}</span>${badges.length ? `<span class="meta">${badges.join('')}</span>` : ''}</button>
+</div>
 </li>`;
+}
+
+const HERO_RING = 169.65;
+
+/** Greeting, what is left today, and what comes next. */
+function renderHero() {
+  const now = new Date();
+  const hour = now.getHours();
+  const greet =
+    hour < 5 ? 'ดึกแล้ว พักผ่อนบ้างนะ' : hour < 11 ? 'อรุณสวัสดิ์' : hour < 13 ? 'สวัสดีตอนเที่ยง' : hour < 17 ? 'สวัสดีตอนบ่าย' : hour < 21 ? 'สวัสดีตอนเย็น' : 'ดึกแล้ว พักผ่อนบ้างนะ';
+  const v = S.taskViews(state, today, 0);
+  const list = v.today;
+  const open = openCount(list);
+  const done = list.length - open;
+  $('#hero-greet').textContent = `${greet} · ${shortDate(today)}`;
+  $('#hero-title').textContent = !list.length ? 'วันนี้ยังว่าง' : open ? `วันนี้เหลือ ${open} เรื่อง` : 'วันนี้เคลียร์หมดแล้ว';
+
+  const timed = list.filter((t) => !t.done && t.time && t.day === today).sort((a, b) => a.time.localeCompare(b.time));
+  const next = timed.find((t) => minutesUntil(t) >= 0);
+  const missed = timed.filter((t) => minutesUntil(t) < 0).at(-1);
+  const inboxOpen = openCount(v.inbox);
+  let sub;
+  if (next) {
+    const mins = minutesUntil(next);
+    sub = `<span class="next${mins <= 30 ? ' soon' : ''}">${icon('i-clock')}${esc(next.time)} ${esc(next.text)}</span> · อีก ${inWords(mins)}`;
+  } else if (missed) {
+    sub = `<span class="next late">${icon('i-clock')}เลย ${esc(missed.time)} แล้ว: ${esc(missed.text)}</span>`;
+  } else if (v.overdue) {
+    sub = `ค้างจากวันก่อน ${v.overdue} เรื่อง`;
+  } else if (inboxOpen) {
+    sub = `ในกล่องรับมี ${inboxOpen} เรื่องรอจัดวัน`;
+  } else if (done) {
+    sub = `เสร็จไปแล้ว ${done} เรื่อง เก่งมาก`;
+  } else {
+    sub = 'นึกอะไรออกก็แปะไว้ก่อน แล้วค่อยจัดทีหลัง';
+  }
+  $('#hero-sub').innerHTML = sub;
+  const frac = list.length ? done / list.length : 0;
+  $('.hr-bar').style.strokeDashoffset = String(HERO_RING * (1 - frac));
+  $('#hero-count').textContent = list.length ? `${done}/${list.length}` : '–';
 }
 
 const openCount = (list) => list.filter((t) => !t.done).length;
@@ -122,14 +282,16 @@ ${g.tasks.length ? `<ul class="list">${g.tasks.map((t) => taskItem(t)).join('')}
   $('.ahead', ahead).innerHTML = days.join('');
 }
 
-function flash(id) {
-  requestAnimationFrame(() => {
-    const el = document.querySelector(`.task[data-id="${CSS.escape(id)}"]`);
-    if (!el) return;
-    el.classList.add('flash');
-    el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-    setTimeout(() => el.classList.remove('flash'), 1300);
-  });
+function flash(id, cls = 'flash', scroll = true) {
+  rendered.then(() =>
+    requestAnimationFrame(() => {
+      const el = document.querySelector(`.task[data-id="${CSS.escape(id)}"]`);
+      if (!el) return;
+      el.classList.add(cls);
+      if (scroll) el.scrollIntoView({ block: 'nearest', behavior: calm.matches ? 'auto' : 'smooth' });
+      setTimeout(() => el.classList.remove(cls), 1400);
+    }),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -137,7 +299,8 @@ function flash(id) {
 
 const input = $('#capture-input');
 const hint = $('#capture-hint');
-const DEFAULT_HINT = 'พิมพ์แล้วกด Enter · ใส่วันเวลาแบบพูดได้ เช่น “พรุ่งนี้ บ่ายสอง”';
+const QUICK_DAYS = ['วันนี้', 'เย็นนี้', 'พรุ่งนี้', 'สุดสัปดาห์', 'สัปดาห์หน้า'];
+const quickChips = () => QUICK_DAYS.map((d) => `<button type="button" class="chip" data-chip="${d}">${d}</button>`).join('');
 
 function captureParse(text) {
   return dropWhen ? { text: text.trim(), day: null, time: null } : parseWhen(text, Date.now());
@@ -147,14 +310,18 @@ function updateHint() {
   const text = input.value;
   if (!text.trim()) {
     dropWhen = false;
-    hint.innerHTML = `<span class="dim">${DEFAULT_HINT}</span>`;
+    if (!hint.querySelector('.chip') || hint.querySelector('.when-chip')) hint.innerHTML = `<span class="chip-label">ใส่วัน</span>${quickChips()}`;
     return;
   }
   const p = captureParse(text);
   if (p.day) {
-    hint.innerHTML = `<span class="when-chip">${icon('i-cal')}${esc(describeWhen(p.day, p.time, today))}<button type="button" data-action="drop-when" aria-label="ไม่ใส่วันเวลา">${icon('i-close')}</button></span><span class="dim">${esc(p.text)}</span>`;
-  } else {
-    hint.innerHTML = `<span class="dim">ไม่มีวัน → ลงกล่องรับ</span>`;
+    const label = describeWhen(p.day, p.time, today);
+    const chip = hint.querySelector('.when-chip');
+    // Keep the chip (and its pop-in) while only the text after it changes.
+    if (chip && chip.dataset.when === label) hint.querySelector('.parsed').textContent = p.text;
+    else hint.innerHTML = `<span class="when-chip" data-when="${esc(label)}">${icon('i-cal')}${esc(label)}<button type="button" data-action="drop-when" aria-label="ไม่ใส่วันเวลา">${icon('i-close')}</button></span><span class="dim parsed">${esc(p.text)}</span>`;
+  } else if (!hint.querySelector('.into-inbox')) {
+    hint.innerHTML = `<span class="chip-label into-inbox">ลงกล่องรับ หรือ</span>${dropWhen ? '' : quickChips()}`;
   }
 }
 
@@ -162,7 +329,7 @@ function addFromText(text, { parse = true } = {}) {
   const p = parse ? captureParse(text) : { text: text.trim(), day: null, time: null };
   const next = S.addTask(state, p);
   if (next === state) return null;
-  commit(next, { undoable: true });
+  commit(next, { undoable: true, animate: true });
   persistOnce();
   return { id: next.tasks.at(-1).id, where: p.day ? describeWhen(p.day, p.time, today) : 'กล่องรับ' };
 }
@@ -186,10 +353,13 @@ $('#capture').addEventListener('submit', (e) => {
 
 input.addEventListener('input', updateHint);
 input.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && input.value) {
+  if (e.key !== 'Escape') return;
+  if (input.value) {
     e.preventDefault();
     input.value = '';
     updateHint();
+  } else if (android && mode === 'panel') {
+    android.close();
   }
 });
 
@@ -201,13 +371,25 @@ input.addEventListener('paste', (e) => {
   e.preventDefault();
   let next = state;
   for (const line of lines) next = S.addTask(next, parseWhen(line, Date.now()));
-  commit(next, { undoable: true });
+  commit(next, { undoable: true, animate: true });
   toast(`แปะ ${lines.length} เรื่องแล้ว`, { label: 'เลิกทำ', run: undo });
 });
 
 hint.addEventListener('click', (e) => {
+  const chip = e.target.closest('[data-chip]')?.dataset.chip;
+  if (chip) {
+    const text = input.value.trim();
+    input.value = text ? `${text} ${chip}` : `${chip} `;
+    dropWhen = false;
+    updateHint();
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+    buzz(5);
+    return;
+  }
   if (!e.target.closest('[data-action="drop-when"]')) return;
   dropWhen = true;
+  hint.innerHTML = '';
   updateHint();
   input.focus();
 });
@@ -258,9 +440,22 @@ function setView(next) {
   view = next;
   for (const tab of $$('.tabs [role="tab"]')) tab.setAttribute('aria-selected', String(tab.dataset.view === next));
   for (const id of ['tasks', 'notes', 'focus']) $(`#view-${id}`).hidden = id !== next;
+  moveInk();
   if (next === 'notes') syncNote();
   if (next === 'focus') renderFocus();
 }
+
+/** Slides the white pill under the selected tab. */
+function moveInk() {
+  const tabs = $('.tabs');
+  const tab = $('.tabs [aria-selected="true"]');
+  const ink = $('#tab-ink');
+  if (!tab || !tabs.offsetWidth) return;
+  ink.style.width = `${tab.offsetWidth}px`;
+  ink.style.transform = `translateX(${tab.offsetLeft}px)`;
+  tabs.classList.add('ready');
+}
+addEventListener('resize', moveInk);
 
 $('.tabs').addEventListener('click', (e) => {
   const tab = e.target.closest('[data-view]');
@@ -274,12 +469,16 @@ $('#view-tasks').addEventListener('click', (e) => {
   const action = e.target.closest('[data-action]')?.dataset.action;
   if (!action) return;
   const id = e.target.closest('.task')?.dataset.id;
+  if (swallowClick) {
+    swallowClick = false;
+    return;
+  }
   if (action === 'toggle' && id) {
-    commit(S.toggleDone(state, id), { undoable: true });
+    toggle(id);
   } else if (action === 'open' && id) {
     openTask(id);
   } else if (action === 'carry') {
-    commit(S.carryOver(state, today), { undoable: true });
+    commit(S.carryOver(state, today), { undoable: true, animate: true });
     toast('ยกมาเป็นของวันนี้แล้ว', { label: 'เลิกทำ', run: undo });
   } else if (action === 'guide') {
     refreshMenu();
@@ -288,6 +487,88 @@ $('#view-tasks').addEventListener('click', (e) => {
     commit({ ...state, prefs: { ...state.prefs, guideDone: true } });
   }
 });
+
+/** Tick a task off (or back on) with a little pop. */
+function toggle(id) {
+  const wasDone = state.tasks.find((t) => t.id === id)?.done;
+  commit(S.toggleDone(state, id), { undoable: true, animate: true });
+  if (!wasDone) {
+    buzz(12);
+    flash(id, 'pop', false);
+  }
+}
+
+/** Left swipe: inbox → today, today or later → the next day (time kept). */
+function postpone(id) {
+  const t = state.tasks.find((x) => x.id === id);
+  if (!t) return;
+  const day = !t.day || t.day < today ? today : addDays(t.day, 1);
+  commit(S.editTask(state, id, { day, time: t.time }), { undoable: true, animate: true });
+  toast(`เลื่อนไป${describeWhen(day, null, today)}แล้ว`, { label: 'เลิกทำ', run: undo });
+}
+
+// Swipe a task: right = done, left = postpone. Vertical drags keep scrolling (touch-action: pan-y).
+let swipe = null;
+let swallowClick = false;
+const SWIPE_AT = 88;
+const board = $('#board');
+
+board.addEventListener('pointerdown', (e) => {
+  const row = e.target.closest('.task .row');
+  if (!row || e.button > 0) return;
+  swipe = { row, li: row.parentElement, x0: e.clientX, y0: e.clientY, dx: 0, on: false, pointer: e.pointerId };
+});
+
+board.addEventListener('pointermove', (e) => {
+  if (!swipe || e.pointerId !== swipe.pointer) return;
+  const dx = e.clientX - swipe.x0;
+  const dy = e.clientY - swipe.y0;
+  if (!swipe.on) {
+    if (Math.abs(dy) > 14 && Math.abs(dy) > Math.abs(dx)) {
+      swipe = null;
+      return;
+    }
+    if (Math.abs(dx) < 14 || Math.abs(dx) < Math.abs(dy) * 1.3) return;
+    swipe.on = true;
+    swipe.row.setPointerCapture?.(e.pointerId);
+    swipe.li.classList.add('swiping');
+  }
+  // Resist past the threshold so it feels elastic.
+  const over = Math.max(0, Math.abs(dx) - SWIPE_AT);
+  const shown = Math.sign(dx) * (Math.min(Math.abs(dx), SWIPE_AT) + over * 0.35);
+  swipe.dx = dx;
+  swipe.row.style.transform = `translateX(${shown}px)`;
+  swipe.li.dataset.dir = dx > 0 ? 'right' : 'left';
+  const armed = Math.abs(dx) >= SWIPE_AT;
+  if (armed !== swipe.li.classList.contains('armed')) {
+    swipe.li.classList.toggle('armed', armed);
+    if (armed) buzz(6);
+  }
+});
+
+function endSwipe(e) {
+  if (!swipe || (e && e.pointerId !== swipe.pointer)) return;
+  const { row, li, dx, on } = swipe;
+  swipe = null;
+  if (!on) return;
+  swallowClick = true;
+  setTimeout(() => (swallowClick = false), 350);
+  const id = li.dataset.id;
+  if (Math.abs(dx) >= SWIPE_AT && e?.type !== 'pointercancel') {
+    row.style.transform = `translateX(${dx > 0 ? 110 : -110}%)`;
+    if (!state.prefs.swipeTipSeen) {
+      state = { ...state, prefs: { ...state.prefs, swipeTipSeen: true } };
+      $('#swipe-tip').hidden = true;
+    }
+    setTimeout(() => (dx > 0 ? toggle(id) : postpone(id)), 160);
+  } else {
+    row.style.transform = '';
+    li.classList.remove('armed');
+    setTimeout(() => li.classList.remove('swiping'), 320);
+  }
+}
+board.addEventListener('pointerup', endSwipe);
+board.addEventListener('pointercancel', endSwipe);
 
 // ---------------------------------------------------------------------------
 // Task dialog
@@ -323,7 +604,7 @@ function saveTask() {
   const t = state.tasks.find((x) => x.id === editingId);
   if (!t) return;
   const day = taskForm.day.value || null;
-  commit(S.editTask(state, t.id, { text: taskForm.text.value, day, time: day ? taskForm.time.value || null : null }), { undoable: true });
+  commit(S.editTask(state, t.id, { text: taskForm.text.value, day, time: day ? taskForm.time.value || null : null }), { undoable: true, animate: true });
 }
 
 taskForm.day.addEventListener('input', markQuick);
@@ -357,8 +638,8 @@ taskForm.addEventListener('click', async (e) => {
   if (!act || !t) return;
   if (act === 'cancel') taskDialog.close();
   if (act === 'delete') {
-    commit(S.deleteTask(state, t.id), { undoable: true });
     taskDialog.close();
+    commit(S.deleteTask(state, t.id), { undoable: true, animate: true });
     toast('ลบแล้ว', { label: 'เลิกทำ', run: undo });
   }
   if (act === 'link') window.open(t.text.match(URL_RE)[0], '_blank', 'noopener');
@@ -376,6 +657,12 @@ taskForm.addEventListener('click', async (e) => {
     }
     saveTask();
     const saved = state.tasks.find((x) => x.id === t.id);
+    if (android) {
+      const begin = toTimestamp(saved.day, saved.time ?? '00:00');
+      const end = saved.time ? begin + 15 * 60_000 : toTimestamp(addDays(saved.day, 1));
+      if (!android.addToCalendar(saved.text, begin, end, !saved.time)) toast('ไม่เจอแอปปฏิทินในเครื่อง');
+      return;
+    }
     await shareFile(icsFileName(saved), taskToICS(saved), 'text/calendar');
   }
 });
@@ -519,7 +806,9 @@ $('#view-focus').addEventListener('click', (e) => {
   }
 });
 
-$('#focus-chip').addEventListener('click', () => setView('focus'));
+$('#focus-chip').addEventListener('click', () => (android && mode === 'panel' ? android.openFull('focus') : setView('focus')));
+$('#open-full').addEventListener('click', () => android?.openFull(''));
+$('#close-panel').addEventListener('click', () => android?.close());
 
 function finishFocus() {
   const f = state.focus;
@@ -584,7 +873,8 @@ function chime() {
 }
 
 async function notify(title, body) {
-  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  // In the Android app the alarms set through syncAndroid() notify instead.
+  if (android || !('Notification' in window) || Notification.permission !== 'granted') return;
   try {
     const reg = await navigator.serviceWorker?.getRegistration();
     if (reg) await reg.showNotification(title, { body, icon: 'icons/icon-192.png', tag: `${title}|${body}`, lang: 'th' });
@@ -605,9 +895,48 @@ $('#menu-btn').addEventListener('click', () => {
 
 function refreshMenu() {
   for (const b of $$('[data-menu="install"]')) b.hidden = !installPrompt;
-  $('[data-menu="notify"]').hidden = !('Notification' in window) || Notification.permission === 'granted';
+  $('[data-menu="notify"]').hidden = !!android || !('Notification' in window) || Notification.permission === 'granted';
   $('#installed-note').hidden = !matchMedia('(display-mode: standalone)').matches;
+  renderAndroid();
 }
+
+function notchOn() {
+  try {
+    return !!JSON.parse(android.info()).notch;
+  } catch {
+    return false;
+  }
+}
+
+/** Notch status and switches in the guide (Android app only). */
+function renderAndroid() {
+  if (!android) return;
+  let info = {};
+  try {
+    info = JSON.parse(android.info());
+  } catch {
+    return;
+  }
+  const status = $('#notch-status');
+  status.textContent = info.notch ? '✓ แถบที่ notch เปิดอยู่' : 'แถบที่ notch ยังไม่ได้เปิด ทำตามข้อ 1';
+  status.classList.toggle('on', !!info.notch);
+  for (const box of $$('[data-android-pref]')) box.checked = !!info[box.dataset.androidPref];
+  $('#version').textContent = `เวอร์ชัน ${VERSION} · แอป ${info.version ?? ''}`;
+}
+
+document.addEventListener('click', (e) => {
+  const act = e.target.closest('[data-android]')?.dataset.android;
+  if (!android || !act) return;
+  if (act === 'notch-settings') android.openNotchSettings();
+  if (act === 'app-info') android.openAppInfo();
+});
+
+document.addEventListener('change', (e) => {
+  const pref = e.target.closest?.('[data-android-pref]')?.dataset.androidPref;
+  if (!android || !pref) return;
+  if (pref === 'pill') android.setPill(e.target.checked);
+  if (pref === 'hideFullscreen') android.setHideFullscreen(e.target.checked);
+});
 
 document.addEventListener('click', async (e) => {
   const item = e.target.closest('[data-menu]')?.dataset.menu;
@@ -639,7 +968,11 @@ document.addEventListener('click', async (e) => {
       return;
     }
     try {
-      await navigator.clipboard.writeText(text);
+      if (android) {
+        if (!android.copyText(text)) throw new Error('no clipboard');
+      } else {
+        await navigator.clipboard.writeText(text);
+      }
       toast('คัดลอกแล้ว วางในแชตหรือโน้ตได้เลย');
     } catch {
       await shareFile('paewai.txt', text, 'text/plain');
@@ -680,6 +1013,10 @@ $('#import-file').addEventListener('change', async (e) => {
 
 /** Saves a file: the share sheet where it can take files, else a download. */
 async function shareFile(name, text, type) {
+  if (android) {
+    android.saveText(name, text, type);
+    return;
+  }
   const file = new File([text], name, { type });
   try {
     if (navigator.canShare?.({ files: [file] })) {
@@ -735,6 +1072,7 @@ document.addEventListener('keydown', (e) => {
 
 function handleLaunch() {
   const params = new URLSearchParams(location.search);
+  params.delete('mode');
   if (![...params.keys()].length) return;
   const parts = [];
   for (const key of ['title', 'text', 'url']) {
@@ -755,7 +1093,7 @@ function handleLaunch() {
     if (!state.focus) commit(S.startFocus(state, minutes, Date.now()));
     setView('focus');
   }
-  history.replaceState(null, '', location.pathname);
+  history.replaceState(null, '', mode ? `${location.pathname}?mode=${encodeURIComponent(mode)}` : location.pathname);
 }
 
 let persisted = false;
@@ -780,12 +1118,20 @@ window.addEventListener('beforeinstallprompt', (e) => {
 
 // Coming back to the window (e.g. tapping the floating bubble): ready to type straight away.
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState !== 'visible') return;
+  if (document.visibilityState !== 'visible') {
+    clearTimeout(noteTimer);
+    save();
+    return;
+  }
+  // Another window (the notch panel, another tab) may have saved in the meantime.
+  state = load();
   render();
+  syncNote();
   checkDue();
   if (view === 'tasks' && !document.querySelector('dialog[open]') && document.activeElement === document.body) input.focus();
 });
 
+let lastMinute = new Date().getMinutes();
 function tick() {
   const f = state.focus;
   if (f && f.endsAt != null && f.endsAt <= Date.now()) finishFocus();
@@ -794,18 +1140,55 @@ function tick() {
     if (noteDay === today) noteDay = dayKey(new Date());
     render();
     syncNote();
+  } else if (new Date().getMinutes() !== lastMinute && !swipe) {
+    // "อีก 25 นาที", soon/late badges
+    renderHero();
+    renderTasks();
   }
+  lastMinute = new Date().getMinutes();
 }
 setInterval(tick, 1000);
 setInterval(checkDue, 15_000);
 
+// Called by the Android app (MainActivity / PanelActivity).
+window.paewai = {
+  reload() {
+    state = load();
+    render();
+    syncNote();
+    updateHint();
+    renderAndroid();
+  },
+  focusCapture() {
+    if (document.querySelector('dialog[open]')) return;
+    setView('tasks');
+    input.focus();
+    android?.showKeyboard(); // after focus, so the keyboard opens on the input
+  },
+  show(next) {
+    if (['tasks', 'notes', 'focus'].includes(next)) setView(next);
+  },
+  addShared(text) {
+    const added = addFromText(String(text), { parse: false });
+    if (!added) return;
+    toast('รับเข้ากล่องรับแล้ว', { label: 'เลิกทำ', run: undo });
+    flash(added.id);
+  },
+  toast(message) {
+    toast(message);
+  },
+};
+
 $('#version').textContent = `เวอร์ชัน ${VERSION}`;
 render();
 updateHint();
+moveInk();
+$('#swipe-tip').hidden = !matchMedia('(pointer: coarse)').matches || !!state.prefs.swipeTipSeen;
 handleLaunch();
 checkDue();
+syncAndroid();
 input.focus();
 
-if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+if (!android && 'serviceWorker' in navigator && location.protocol.startsWith('http')) {
   navigator.serviceWorker.register('sw.js').catch(() => {});
 }

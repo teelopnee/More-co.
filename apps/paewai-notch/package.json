@@ -1,0 +1,14 @@
+{
+  "name": "paewai-notch",
+  "private": true,
+  "version": "1.0.0",
+  "description": "แปะไว้ ที่ notch — แอป Android ที่มีแถบครอบกล้องด้านบนของ Galaxy Tab S Ultra",
+  "type": "module",
+  "scripts": {
+    "test": "node --test \"tests/*.test.js\"",
+    "build": "node scripts/build.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

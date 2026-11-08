@@ -6,8 +6,8 @@
 <title>แปะไว้</title>
 <meta name="description" content="แปะทุกเรื่องที่ค้างในหัวไว้ก่อน แล้วกลับไปทำงานต่อ เปิดจากขอบจอแท็บเล็ต Samsung เป็นหน้าต่างลอยได้">
 <meta name="color-scheme" content="light dark">
-<meta name="theme-color" content="#f7f5ef" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#16151a" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f5f4f0" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0e0e12" media="(prefers-color-scheme: dark)">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/favicon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
@@ -16,25 +16,53 @@
 </head>
 <body>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
-  <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <defs>
+    <linearGradient id="g-focus" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffd43b"/>
+      <stop offset="1" stop-color="#ff7a45"/>
+    </linearGradient>
+    <linearGradient id="g-day" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#8b85ff"/>
+      <stop offset="1" stop-color="#4f46e5"/>
+    </linearGradient>
+  </defs>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M5.5 12.5l4 4L18.5 7.5" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
   <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
   <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="2" fill="currentColor"/><circle cx="12" cy="12" r="2" fill="currentColor"/><circle cx="19" cy="12" r="2" fill="currentColor"/></symbol>
-  <symbol id="i-cal" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15" rx="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M3.5 10h17M8 3v4M16 3v4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
-  <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></symbol>
+  <symbol id="i-cal" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15" rx="3.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M3.5 10h17M8 3v4M16 3v4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></symbol>
   <symbol id="i-left" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
   <symbol id="i-right" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
   <symbol id="i-timer" viewBox="0 0 24 24"><circle cx="12" cy="13.5" r="7.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 9.5v4l2.5 2M9.5 2.5h5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-inbox" viewBox="0 0 24 24"><path d="M3.5 13.5l2.6-7.2A2 2 0 0 1 8 5h8a2 2 0 0 1 1.9 1.3l2.6 7.2V18a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M3.5 13.5H8l1.5 2.5h5l1.5-2.5h4.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M5.3 18.7l1.6-1.6M17.1 6.9l1.6-1.6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+  <symbol id="i-week" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15" rx="3.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M3.5 10h17M8 3v4M16 3v4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="8.5" cy="14.5" r="1.3" fill="currentColor"/><circle cx="12" cy="14.5" r="1.3" fill="currentColor"/><circle cx="15.5" cy="14.5" r="1.3" fill="currentColor"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M12 7.5V12l3 2" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 14a4.5 4.5 0 0 0 6.4 0l3-3a4.5 4.5 0 0 0-6.4-6.4l-1 1M14 10a4.5 4.5 0 0 0-6.4 0l-3 3a4.5 4.5 0 0 0 6.4 6.4l1-1" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4.5 7h15M9.5 7V4.8h5V7M6.5 7l.9 12.2A1.8 1.8 0 0 0 9.2 21h5.6a1.8 1.8 0 0 0 1.8-1.8L17.5 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="M12 19V6M6.5 11.5L12 6l5.5 5.5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h13M13 6.5l5.5 5.5-5.5 5.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-expand" viewBox="0 0 24 24"><path d="M14 4.5h5.5V10M10 19.5H4.5V14M19.5 4.5l-6 6M4.5 19.5l6-6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3l1.9 5.6L19.5 10.5l-5.6 1.9L12 18l-1.9-5.6L4.5 10.5l5.6-1.9z" fill="currentColor"/></symbol>
 </svg>
+
+<div class="ambient" aria-hidden="true"></div>
 
 <div class="dock">
   <header class="top">
     <div class="brand">
-      <img src="icons/favicon.svg" alt="" width="28" height="28">
+      <img src="icons/favicon.svg" alt="" width="30" height="30">
       <strong>แปะไว้</strong>
       <span id="today-label" class="dim"></span>
     </div>
     <button id="focus-chip" class="focus-chip" type="button" hidden>
       <svg aria-hidden="true"><use href="#i-timer"/></svg><span></span>
+    </button>
+    <button id="open-full" class="icon-btn panel-only" type="button" aria-label="เปิดแอปเต็ม">
+      <svg aria-hidden="true"><use href="#i-expand"/></svg>
+    </button>
+    <button id="close-panel" class="icon-btn panel-only" type="button" aria-label="ปิด">
+      <svg aria-hidden="true"><use href="#i-close"/></svg>
     </button>
     <button id="menu-btn" class="icon-btn" type="button" aria-label="เมนูและวิธีใช้">
       <svg aria-hidden="true"><use href="#i-more"/></svg>
@@ -48,12 +76,15 @@
       <button id="mic-btn" class="icon-btn mic" type="button" aria-label="พูดแทนพิมพ์" hidden>
         <svg aria-hidden="true"><use href="#i-mic"/></svg>
       </button>
-      <button class="primary" type="submit">แปะ</button>
+      <button class="send" type="submit" aria-label="แปะ">
+        <span>แปะ</span><svg aria-hidden="true"><use href="#i-send"/></svg>
+      </button>
     </div>
     <div id="capture-hint" class="capture-hint" aria-live="polite"></div>
   </form>
 
   <nav class="tabs" role="tablist" aria-label="หน้า">
+    <span class="tab-ink" id="tab-ink" aria-hidden="true"></span>
     <button type="button" role="tab" data-view="tasks" aria-selected="true">งาน</button>
     <button type="button" role="tab" data-view="notes" aria-selected="false">โน้ต</button>
     <button type="button" role="tab" data-view="focus" aria-selected="false">โฟกัส</button>
@@ -62,33 +93,64 @@
 
 <main>
   <section id="view-tasks" class="view" role="tabpanel" aria-label="งาน">
+    <section class="hero" id="hero" aria-live="polite">
+      <div class="hero-text">
+        <p class="hero-greet" id="hero-greet"></p>
+        <h1 id="hero-title"></h1>
+        <p class="hero-sub" id="hero-sub"></p>
+      </div>
+      <div class="hero-ring" aria-hidden="true">
+        <svg viewBox="0 0 64 64">
+          <circle class="hr-track" cx="32" cy="32" r="27"/>
+          <circle class="hr-bar" cx="32" cy="32" r="27"/>
+        </svg>
+        <span id="hero-count"></span>
+      </div>
+    </section>
+
     <div id="setup-banner" class="banner" hidden>
-      <span>ให้ <strong>แปะไว้</strong> อยู่ติดขอบจอ เรียกขึ้นมาเป็นหน้าต่างลอยได้จากทุกแอป</span>
+      <svg class="banner-icon" aria-hidden="true"><use href="#i-spark"/></svg>
+      <span class="web-only">ให้ <strong>แปะไว้</strong> อยู่ติดขอบจอ เรียกขึ้นมาเป็นหน้าต่างลอยได้จากทุกแอป</span>
+      <span class="android-only">เปิดแถบที่ notch แล้วแตะแถบรอบกล้องเพื่อแปะได้จากทุกแอป</span>
       <span class="banner-actions">
-        <button type="button" class="link" data-action="guide">ดูวิธี</button>
+        <button type="button" class="banner-go" data-action="guide">ดูวิธี</button>
         <button type="button" class="icon-btn small" data-action="dismiss-banner" aria-label="ปิด"><svg aria-hidden="true"><use href="#i-close"/></svg></button>
       </span>
     </div>
+
     <div class="board" id="board">
       <section class="col" id="col-inbox" aria-labelledby="h-inbox">
-        <h2 id="h-inbox">กล่องรับ <span class="count"></span></h2>
+        <header class="col-head">
+          <span class="col-icon ci-inbox"><svg aria-hidden="true"><use href="#i-inbox"/></svg></span>
+          <h2 id="h-inbox">กล่องรับ</h2>
+          <span class="count"></span>
+        </header>
         <p class="col-sub">เรื่องที่ยังไม่มีวัน ว่างแล้วค่อยจัด</p>
         <ul class="list"></ul>
-        <p class="empty">ยังไม่มีอะไรค้าง หัวโล่ง</p>
+        <p class="empty"><span class="empty-art"><svg aria-hidden="true"><use href="#i-inbox"/></svg></span>ยังไม่มีอะไรค้าง หัวโล่ง</p>
       </section>
       <section class="col" id="col-today" aria-labelledby="h-today">
-        <h2 id="h-today">วันนี้ <span class="count"></span></h2>
+        <header class="col-head">
+          <span class="col-icon ci-today"><svg aria-hidden="true"><use href="#i-sun"/></svg></span>
+          <h2 id="h-today">วันนี้</h2>
+          <span class="count"></span>
+        </header>
         <p class="col-sub" id="today-sub"></p>
         <button type="button" class="carry" data-action="carry" hidden></button>
         <ul class="list"></ul>
-        <p class="empty">วันนี้ยังว่าง พิมพ์ “วันนี้” หรือเวลา เช่น “บ่ายสอง” ไว้ในเรื่องที่แปะ</p>
+        <p class="empty"><span class="empty-art"><svg aria-hidden="true"><use href="#i-sun"/></svg></span>วันนี้ยังว่าง ลองพิมพ์ “บ่ายสอง ประชุม”</p>
       </section>
       <section class="col" id="col-ahead" aria-labelledby="h-ahead">
-        <h2 id="h-ahead">ข้างหน้า <span class="count"></span></h2>
+        <header class="col-head">
+          <span class="col-icon ci-ahead"><svg aria-hidden="true"><use href="#i-week"/></svg></span>
+          <h2 id="h-ahead">ข้างหน้า</h2>
+          <span class="count"></span>
+        </header>
         <p class="col-sub">6 วันถัดไป</p>
         <div class="ahead"></div>
       </section>
     </div>
+    <p class="swipe-tip dim small" id="swipe-tip" hidden>ปัดขวา = เสร็จ · ปัดซ้าย = เลื่อนไปวันถัดไป</p>
   </section>
 
   <section id="view-notes" class="view" role="tabpanel" aria-label="โน้ต" hidden>
@@ -100,10 +162,12 @@
       </div>
       <button type="button" class="icon-btn" data-note="1" aria-label="วันถัดไป"><svg aria-hidden="true"><use href="#i-right"/></svg></button>
     </div>
-    <textarea id="note" aria-label="โน้ตของวันนี้" placeholder="เทความคิดลงตรงนี้ได้ยาว ๆ บันทึกให้เอง&#10;บรรทัดไหนเป็นงาน วางเคอร์เซอร์ไว้แล้วกด “บรรทัดนี้ → งาน”"></textarea>
+    <div class="paper">
+      <textarea id="note" aria-label="โน้ตของวันนี้" placeholder="เทความคิดลงตรงนี้ได้ยาว ๆ บันทึกให้เอง&#10;บรรทัดไหนเป็นงาน วางเคอร์เซอร์ไว้แล้วกด “บรรทัดนี้ → งาน”"></textarea>
+    </div>
     <div class="notes-actions">
-      <button type="button" id="line-to-task">บรรทัดนี้ → งาน</button>
-      <span class="dim kbd-hint">หรือ Ctrl + Enter</span>
+      <button type="button" id="line-to-task" class="pill-btn"><span>บรรทัดนี้</span><svg aria-hidden="true"><use href="#i-arrow"/></svg><span>งาน</span></button>
+      <span class="dim kbd-hint">หรือ <kbd>Ctrl</kbd> + <kbd>Enter</kbd></span>
     </div>
   </section>
 
@@ -135,8 +199,13 @@
 
 <dialog id="task-dialog" aria-labelledby="task-dialog-title">
   <form id="task-form" method="dialog">
-    <h2 id="task-dialog-title">แก้ไขเรื่องนี้</h2>
-    <textarea name="text" rows="3" maxlength="2000" aria-label="ข้อความ"></textarea>
+    <div class="grabber" aria-hidden="true"></div>
+    <div class="sheet-head">
+      <h2 id="task-dialog-title">แก้ไขเรื่องนี้</h2>
+      <button type="button" class="icon-btn small" data-act="cancel" aria-label="ปิด"><svg aria-hidden="true"><use href="#i-close"/></svg></button>
+    </div>
+    <textarea name="text" rows="2" maxlength="2000" aria-label="ข้อความ"></textarea>
+    <p class="field-label">เมื่อไร</p>
     <div class="quick" role="group" aria-label="ย้ายไป">
       <button type="button" data-move="inbox">กล่องรับ</button>
       <button type="button" data-move="today">วันนี้</button>
@@ -144,30 +213,31 @@
       <button type="button" data-move="next-week">สัปดาห์หน้า</button>
     </div>
     <div class="when">
-      <label>วัน <input type="date" name="day"></label>
-      <label>เวลา <input type="time" name="time"></label>
+      <label><svg aria-hidden="true"><use href="#i-cal"/></svg><input type="date" name="day" aria-label="วัน"></label>
+      <label><svg aria-hidden="true"><use href="#i-clock"/></svg><input type="time" name="time" aria-label="เวลา"></label>
     </div>
-    <div class="more-actions">
-      <button type="button" data-act="link" hidden>เปิดลิงก์</button>
-      <button type="button" data-act="calendar">ลงปฏิทิน (มีเสียงเตือน)</button>
-      <button type="button" data-act="focus">โฟกัสเรื่องนี้ 25 นาที</button>
-      <button type="button" data-act="delete" class="danger">ลบ</button>
+    <div class="tools">
+      <button type="button" data-act="link" hidden><svg aria-hidden="true"><use href="#i-link"/></svg>เปิดลิงก์</button>
+      <button type="button" data-act="calendar"><svg aria-hidden="true"><use href="#i-cal"/></svg>ลงปฏิทิน</button>
+      <button type="button" data-act="focus"><svg aria-hidden="true"><use href="#i-timer"/></svg>โฟกัส 25 นาที</button>
+      <button type="button" data-act="delete" class="danger"><svg aria-hidden="true"><use href="#i-trash"/></svg>ลบ</button>
     </div>
     <div class="dialog-actions">
-      <button type="button" data-act="cancel">ยกเลิก</button>
-      <button type="submit" class="primary" data-act="save">บันทึก</button>
+      <button type="submit" class="primary wide" data-act="save">บันทึก</button>
     </div>
   </form>
 </dialog>
 
 <dialog id="menu-dialog" aria-labelledby="menu-title">
   <div class="sheet">
+    <div class="grabber" aria-hidden="true"></div>
     <div class="sheet-head">
       <h2 id="menu-title">แปะไว้</h2>
       <button type="button" class="icon-btn small" data-close aria-label="ปิด"><svg aria-hidden="true"><use href="#i-close"/></svg></button>
     </div>
     <div class="menu-list">
-      <button type="button" data-menu="guide">วิธีวางไว้ขอบจอ Samsung</button>
+      <button type="button" data-menu="guide" class="web-only">วิธีวางไว้ขอบจอ Samsung</button>
+      <button type="button" data-menu="guide" class="android-only">ตั้งค่าแถบที่ notch</button>
       <button type="button" data-menu="install" hidden>ติดตั้งเป็นแอป</button>
       <button type="button" data-menu="notify" hidden>เปิดการแจ้งเตือนเมื่อถึงเวลา</button>
       <button type="button" data-menu="copy">คัดลอกเรื่องที่ค้างทั้งหมดเป็นข้อความ</button>
@@ -182,39 +252,66 @@
 
 <dialog id="guide-dialog" aria-labelledby="guide-title">
   <div class="sheet guide">
+    <div class="grabber" aria-hidden="true"></div>
     <div class="sheet-head">
-      <h2 id="guide-title">ให้แปะไว้อยู่ติดขอบจอ Samsung</h2>
+      <h2 id="guide-title"><span class="web-only">ให้แปะไว้อยู่ติดขอบจอ Samsung</span><span class="android-only">แถบแปะไว้ที่ notch</span></h2>
       <button type="button" class="icon-btn small" data-close aria-label="ปิด"><svg aria-hidden="true"><use href="#i-close"/></svg></button>
     </div>
-    <p class="dim">บน MacBook มีรอยบากให้เรียกแอปจด บนแท็บเล็ต Samsung ใช้ขอบจอ (Edge panel) กับหน้าต่างลอย (Pop-up view) แทน ตั้งครั้งเดียว ใช้ได้ตลอด</p>
-    <ol class="steps">
-      <li>
-        <strong>ติดตั้งเป็นแอป</strong>
-        <span>เปิดหน้านี้ใน Chrome → ⋮ → <em>เพิ่มลงในหน้าจอหลัก</em> หรือ <em>ติดตั้งแอป</em>
-          (Samsung Internet: ≡ → <em>เพิ่มหน้าลงใน</em> → <em>หน้าจอหลัก</em>)</span>
-        <button type="button" class="primary" data-menu="install" hidden>ติดตั้งเลย</button>
-        <span class="ok" id="installed-note" hidden>✓ เปิดจากแอปที่ติดตั้งแล้ว</span>
-      </li>
-      <li>
-        <strong>ใส่ไว้ใน Edge panel</strong>
-        <span>การตั้งค่า → หน้าจอ → <em>Edge panels</em> → เปิด → แตะแผง <em>แอป</em> → แก้ไข → เพิ่ม <em>แปะไว้</em></span>
-      </li>
-      <li>
-        <strong>เปิดเป็นหน้าต่างลอย</strong>
-        <span>ปัดแถบเล็ก ๆ ที่ขอบจอเข้ามา แล้ว<em>ลาก</em>ไอคอน แปะไว้ ออกมาวางกลางจอ จะเปิดเป็นหน้าต่างลอยทับแอปที่ใช้อยู่
-          (ลากจากแถบงาน/Taskbar ด้านล่างก็ได้)</span>
-      </li>
-      <li>
-        <strong>ย่อเป็นไอคอนลอย</strong>
-        <span>แตะแถบด้านบนของหน้าต่างลอย → ปุ่ม <em>ย่อ</em> จะกลายเป็นวงกลมเล็ก ๆ ลอยอยู่ข้างจอ นึกอะไรออกก็แตะ พิมพ์ กด Enter แล้วย่อกลับ</span>
-      </li>
-      <li>
-        <strong>ทางลัดอื่น ๆ</strong>
-        <span>กดค้างที่ไอคอนแอป → <em>แปะเรื่องใหม่</em> / <em>โน้ตวันนี้</em> / <em>โฟกัส 25 นาที</em> (ลากทางลัดไปวางบนหน้าจอหลักได้)
-          · แชร์ข้อความหรือลิงก์จากแอปไหนก็ได้ → เลือก <em>แปะไว้</em> จะเข้ากล่องรับ</span>
-      </li>
-    </ol>
-    <p class="dim small">ชื่อเมนูอาจต่างกันเล็กน้อยตามรุ่น One UI · ถ้าลากแล้วไม่เป็นหน้าต่างลอย ให้เปิด การตั้งค่า → ฟีเจอร์ขั้นสูง → Labs → <em>Multi window for all apps</em></p>
+    <div class="android-only">
+      <p id="notch-status" class="status"></p>
+      <ol class="steps">
+        <li>
+          <strong>เปิดแถบที่ notch</strong>
+          <span>การตั้งค่า → <em>การช่วยเหลือการเข้าถึง</em> → <em>แอปที่ติดตั้ง</em> → <em>แปะไว้ ที่ notch</em> → เปิด</span>
+          <button type="button" class="primary" data-android="notch-settings">ไปที่หน้าตั้งค่า</button>
+        </li>
+        <li>
+          <strong>ถ้ากดเปิดไม่ได้ ขึ้นว่า “การตั้งค่าที่ถูกจำกัด”</strong>
+          <span>เพราะติดตั้งเองไม่ผ่าน Play Store: เปิด <em>ข้อมูลแอป</em> → แตะ ⋮ มุมขวาบน → <em>อนุญาตการตั้งค่าที่ถูกจำกัด</em> แล้วกลับไปทำข้อ 1</span>
+          <button type="button" class="secondary" data-android="app-info">เปิดข้อมูลแอป</button>
+        </li>
+        <li>
+          <strong>ใช้งาน</strong>
+          <span>แตะแถบดำรอบกล้อง หรือปัดลงจากแถบ = ช่องแปะเลื่อนลงมาทับแอปที่ใช้อยู่ พิมพ์ กด Enter แตะข้างนอกเพื่อเก็บ
+            · กดค้างที่แถบ = เปิดแอปเต็ม · ตัวเลขบนแถบ = เรื่องที่ต้องทำวันนี้ ตอนโฟกัสจะเป็นเวลาที่เหลือ · ถึงเวลาเตือน แถบจะขยายบอก</span>
+        </li>
+      </ol>
+      <label class="switch"><input type="checkbox" data-android-pref="pill"><span>แสดงแถบที่ notch</span></label>
+      <label class="switch"><input type="checkbox" data-android-pref="hideFullscreen"><span>ซ่อนแถบตอนดูวิดีโอหรือเล่นเกมเต็มจอ</span></label>
+      <p class="dim small">ใช้สิทธิ์การช่วยเหลือการเข้าถึงเพียงเพื่อวางแถบทับแถบสถานะได้ แปะไว้ไม่อ่าน ไม่เก็บ และไม่ส่งสิ่งที่อยู่บนจอไปที่ไหน</p>
+    </div>
+    <div class="web-only">
+      <p class="dim">บน MacBook มีรอยบากให้เรียกแอปจด บนแท็บเล็ต Samsung ใช้ขอบจอ (Edge panel) กับหน้าต่างลอย (Pop-up view) แทน ตั้งครั้งเดียว ใช้ได้ตลอด</p>
+      <p class="tip">มี Galaxy Tab S Ultra ที่มี notch? <a href="../paewai-notch/">แปะไว้ฉบับแอป Android</a> มีแถบครอบกล้องด้านบน แตะแล้วช่องแปะเลื่อนลงมาจาก notch</p>
+      <ol class="steps">
+        <li>
+          <strong>ติดตั้งเป็นแอป</strong>
+          <span>เปิดหน้านี้ใน Chrome → ⋮ → <em>เพิ่มลงในหน้าจอหลัก</em> หรือ <em>ติดตั้งแอป</em>
+            (Samsung Internet: ≡ → <em>เพิ่มหน้าลงใน</em> → <em>หน้าจอหลัก</em>)</span>
+          <button type="button" class="primary" data-menu="install" hidden>ติดตั้งเลย</button>
+          <span class="ok" id="installed-note" hidden>✓ เปิดจากแอปที่ติดตั้งแล้ว</span>
+        </li>
+        <li>
+          <strong>ใส่ไว้ใน Edge panel</strong>
+          <span>การตั้งค่า → หน้าจอ → <em>Edge panels</em> → เปิด → แตะแผง <em>แอป</em> → แก้ไข → เพิ่ม <em>แปะไว้</em></span>
+        </li>
+        <li>
+          <strong>เปิดเป็นหน้าต่างลอย</strong>
+          <span>ปัดแถบเล็ก ๆ ที่ขอบจอเข้ามา แล้ว<em>ลาก</em>ไอคอน แปะไว้ ออกมาวางกลางจอ จะเปิดเป็นหน้าต่างลอยทับแอปที่ใช้อยู่
+            (ลากจากแถบงาน/Taskbar ด้านล่างก็ได้)</span>
+        </li>
+        <li>
+          <strong>ย่อเป็นไอคอนลอย</strong>
+          <span>แตะแถบด้านบนของหน้าต่างลอย → ปุ่ม <em>ย่อ</em> จะกลายเป็นวงกลมเล็ก ๆ ลอยอยู่ข้างจอ นึกอะไรออกก็แตะ พิมพ์ กด Enter แล้วย่อกลับ</span>
+        </li>
+        <li>
+          <strong>ทางลัดอื่น ๆ</strong>
+          <span>กดค้างที่ไอคอนแอป → <em>แปะเรื่องใหม่</em> / <em>โน้ตวันนี้</em> / <em>โฟกัส 25 นาที</em> (ลากทางลัดไปวางบนหน้าจอหลักได้)
+            · แชร์ข้อความหรือลิงก์จากแอปไหนก็ได้ → เลือก <em>แปะไว้</em> จะเข้ากล่องรับ</span>
+        </li>
+      </ol>
+      <p class="dim small">ชื่อเมนูอาจต่างกันเล็กน้อยตามรุ่น One UI · ถ้าลากแล้วไม่เป็นหน้าต่างลอย ให้เปิด การตั้งค่า → ฟีเจอร์ขั้นสูง → Labs → <em>Multi window for all apps</em></p>
+    </div>
     <h3>พิมพ์วันเวลาแบบพูดได้เลย</h3>
     <ul class="examples">
       <li><code>พรุ่งนี้ 5 โมงเย็น โทรหาแม่</code></li>
@@ -223,7 +320,8 @@
       <li><code>อีก 20 นาที ปิดเตา</code> · <code>สองทุ่ม ดูบอล</code></li>
       <li><code>นัดหมอ 3 ธ.ค. 9:30</code> · <code>สัปดาห์หน้า ต่อภาษีรถ</code></li>
     </ul>
-    <p class="dim small">ไม่มีวัน = ลงกล่องรับ · แตะ × ที่ป้ายวันเวลาถ้าไม่อยากให้แปลง · วางข้อความหลายบรรทัด = แปะหลายเรื่องทีเดียว</p>
+    <p class="dim small">ไม่มีวัน = ลงกล่องรับ · แตะ × ที่ป้ายวันเวลาถ้าไม่อยากให้แปลง · วางข้อความหลายบรรทัด = แปะหลายเรื่องทีเดียว
+      · ปัดเรื่องไปทางขวา = เสร็จ · ปัดไปทางซ้าย = เลื่อนไปวันถัดไป</p>
     <h3>คีย์บอร์ด (Book Cover Keyboard)</h3>
     <p class="dim small"><kbd>/</kbd> หรือ <kbd>Ctrl</kbd>+<kbd>K</kbd> ไปช่องแปะ · <kbd>Enter</kbd> แปะ · <kbd>Esc</kbd> ล้างช่อง · <kbd>Ctrl</kbd>+<kbd>1</kbd>/<kbd>2</kbd>/<kbd>3</kbd> สลับหน้า</p>
     <button type="button" class="primary wide" data-close data-action="guide-done">เข้าใจแล้ว</button>

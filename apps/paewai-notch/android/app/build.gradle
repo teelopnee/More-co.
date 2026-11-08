@@ -1,0 +1,61 @@
+plugins {
+    id 'com.android.application'
+}
+
+// scripts/build.mjs passes these; the defaults are for building by hand.
+def env = System.getenv()
+def versionCodeValue = (env.PAEWAI_VERSION_CODE ?: '1') as int
+def versionNameValue = env.PAEWAI_VERSION_NAME ?: 'dev'
+// The stable signing key never lives in the repo: scripts/build.mjs writes it from the
+// PAEWAI_KEYSTORE_B64 secret and passes its path. Without it the APK is debug-signed: a preview
+// that cannot be installed over an earlier build.
+def keystore = env.PAEWAI_KEYSTORE ? file(env.PAEWAI_KEYSTORE) : null
+
+android {
+    namespace 'com.moreco.paewai'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'com.moreco.paewai'
+        minSdk 30
+        targetSdk 35
+        versionCode versionCodeValue
+        versionName versionNameValue
+    }
+
+    signingConfigs {
+        if (keystore != null) {
+            release {
+                storeFile keystore
+                storePassword env.PAEWAI_KEYSTORE_PASSWORD
+                keyAlias env.PAEWAI_KEY_ALIAS ?: 'paewai'
+                keyPassword env.PAEWAI_KEYSTORE_PASSWORD
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig keystore != null ? signingConfigs.release : signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    lint {
+        abortOnError false
+        checkReleaseBuilds false
+    }
+}
+
+dependencies {
+    testImplementation 'junit:junit:4.13.2'
+}
