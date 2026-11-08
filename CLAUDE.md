@@ -11,7 +11,11 @@ computer and writes in Thai; reply in Thai.
     It began as an artifact page and calls `window.claude?.hot` only when present; keep the
     doctype/charset/viewport tags and the `[hidden] { display: none !important; }` rule.
   - `apps/paewai/`: แปะไว้, a no-dependency PWA "brain dump" for the Samsung tablet (Edge panel +
-    pop-up window). Thai natural-language dates in `src/lib/dates.js`; `npm test`, `npm run build`.
+    pop-up window), phones and iPhone. Thai natural-language dates in `src/lib/dates.js`; `npm test`,
+    `npm run build`. Sync goes through the owner's own private GitHub repo (`src/lib/sync.js`,
+    `src/lib/github.js`; token stored per device, never in the data or this repo). "ถาม Claude" uses
+    the bundled official SDK in `src/vendor/anthropic.js` with the owner's own key, or opens claude.ai.
+    `src/vendor/` holds pre-bundled third-party code; regenerate it as the app README says.
   - `apps/paewai-notch/`: the same แปะไว้ as an Android app (Java, Gradle in `android/`) with a pill
     over the camera notch (accessibility overlay) and a drop-down panel; it bundles `../paewai/src`
     into the APK, so web changes ship in both. `npm run build` needs Java 17+ and `ANDROID_HOME`

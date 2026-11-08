@@ -18,7 +18,10 @@ test('build output works from a sub-path and works offline', () => {
     assert.match(html, /^<!doctype html>/i);
     assert.match(html, /<meta charset="utf-8">/);
     assert.match(html, /<meta name="viewport"/);
-    const refs = [...html.matchAll(/(?:href|src)="([^"#][^"]*)"/g)].map((m) => m[1]);
+    // Links out (GitHub, Claude) open in the browser; everything the page itself loads is relative.
+    const refs = [...html.matchAll(/<(a|link|script|img)\b[^>]*?(?:href|src)="([^"#][^"]*)"/g)]
+      .filter(([, tag, ref]) => !(tag === 'a' && /^https:\/\//.test(ref)))
+      .map((m) => m[2]);
     assert.ok(refs.length >= 5);
     for (const ref of refs) {
       assert.ok(!ref.startsWith('/') && !/^https?:/.test(ref), `absolute URL in index.html: ${ref}`);

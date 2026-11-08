@@ -1,6 +1,7 @@
 package com.moreco.paewai;
 
 import android.app.Activity;
+import android.app.NotificationManager;
 import android.content.Context;
 import android.content.Intent;
 import android.graphics.Insets;
@@ -33,6 +34,8 @@ public class PanelActivity extends Activity implements Bridge.Owner {
     private FrameLayout root;
     private FrameLayout card;
     private boolean closing;
+    /** Opened by a notification button: no keyboard this time. */
+    private boolean quiet;
     private int topInset;
     private int bottomInset;
 
@@ -104,9 +107,21 @@ public class PanelActivity extends Activity implements Bridge.Owner {
         enter();
     }
 
-    /** Text shared from another app goes straight into กล่องรับ. */
+    /** Text shared from another app goes straight into กล่องรับ; reminder buttons snooze or tick off. */
     private void handle(Intent intent) {
-        if (intent == null || !Intent.ACTION_SEND.equals(intent.getAction())) return;
+        if (intent == null) return;
+        String action = intent.getAction();
+        if (ReminderReceiver.ACTION_SNOOZE.equals(action) || ReminderReceiver.ACTION_DONE.equals(action)) {
+            String id = intent.getStringExtra(ReminderReceiver.EXTRA_ID);
+            if (id == null) return;
+            getSystemService(NotificationManager.class).cancel(ReminderReceiver.notificationId(id));
+            String call = ReminderReceiver.ACTION_SNOOZE.equals(action) ? "snooze" : "done";
+            host.js("window.paewai&&paewai." + call + "(" + JSONObject.quote(id) + ")");
+            quiet = true;
+            setIntent(new Intent(this, PanelActivity.class));
+            return;
+        }
+        if (!Intent.ACTION_SEND.equals(action)) return;
         String subject = intent.getStringExtra(Intent.EXTRA_SUBJECT);
         String text = intent.getStringExtra(Intent.EXTRA_TEXT);
         String all = ((subject == null ? "" : subject + " ") + (text == null ? "" : text)).trim();
@@ -117,6 +132,11 @@ public class PanelActivity extends Activity implements Bridge.Owner {
     protected void onResume() {
         super.onResume();
         shown = true;
+        if (quiet) {
+            quiet = false;
+            host.js("window.paewai&&paewai.reload()");
+            return;
+        }
         host.js("window.paewai&&(paewai.reload(),paewai.focusCapture())");
         root.postDelayed(() -> new Bridge(this, host, this).showKeyboard(), 180);
     }

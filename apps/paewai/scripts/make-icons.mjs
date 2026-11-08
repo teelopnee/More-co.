@@ -19,6 +19,8 @@ for (const [name, svg, size, bg] of [
   ['icon-192.png', any, 192, 'transparent'],
   ['icon-512.png', any, 512, 'transparent'],
   ['icon-maskable-512.png', maskable, 512, '#2b2a5c'],
+  // iPhone home screen: full-bleed, iOS rounds the corners itself
+  ['apple-touch-icon.png', maskable, 180, '#2b2a5c'],
 ]) {
   await page.setViewportSize({ width: size, height: size });
   await page.setContent(

@@ -34,11 +34,19 @@ self.addEventListener('fetch', (event) => {
   event.respondWith(caches.match(req, { ignoreSearch: true }).then((hit) => hit || fetch(req)));
 });
 
+// Tapping a reminder opens แปะไว้; its buttons (เลื่อน 10 นาที / เสร็จแล้ว) act without opening it.
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
+  const id = event.notification.data?.id;
+  const action = ['snooze', 'done'].includes(event.action) && id ? event.action : '';
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
       const open = list.find((c) => c.url.startsWith(self.registration.scope));
+      if (action && open) {
+        open.postMessage({ type: 'notification-action', action, id });
+        return undefined;
+      }
+      if (action) return self.clients.openWindow(`./?${action}=${encodeURIComponent(id)}`);
       return open ? open.focus() : self.clients.openWindow('./');
     }),
   );

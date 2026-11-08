@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { classify, findAmount, moneyCategory, shopSection, splitItems } from '../src/lib/sort.js';
+import { classify, findAmount, moneyCategory, pastedLines, shopSection, splitItems } from '../src/lib/sort.js';
 
 // Sunday 8 November 2026, 10:00
 const NOW = new Date(2026, 10, 8, 10, 0).getTime();
@@ -83,4 +83,10 @@ test('word lists', () => {
   assert.equal(shopSection('อาหารแมว'), 'สัตว์เลี้ยง');
   assert.equal(moneyCategory('ค่าไฟเดือนนี้'), 'บิล ค่าบ้าน');
   assert.equal(moneyCategory('อะไรสักอย่าง'), null);
+});
+
+test('pasted lists: one entry per line, without markdown', () => {
+  const text = '## แผนพรุ่งนี้\n- [ ] พรุ่งนี้ 9 โมง โทรหาหมอ\n- **ซื้อ** ไข่ นม\n1. ไอเดีย: ทำคลิปรีวิว\n**วันจันทร์:**\n---\n* [x] จ่ายค่าไฟ 850\n2) 10:30 ประชุม\n\n';
+  assert.deepEqual(pastedLines(text), ['พรุ่งนี้ 9 โมง โทรหาหมอ', 'ซื้อ ไข่ นม', 'ไอเดีย: ทำคลิปรีวิว', 'จ่ายค่าไฟ 850', '10:30 ประชุม']);
+  assert.deepEqual(pastedLines('25 บาท ค่าน้ำ'), ['25 บาท ค่าน้ำ']); // a number is not a list marker
 });

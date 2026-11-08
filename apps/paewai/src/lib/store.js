@@ -1,14 +1,29 @@
 // App state and the pure functions that change it. Every function returns a new state object,
 // so the UI can keep the previous one for "เลิกทำ" (undo).
 
-import { addDays, dayKey, isRepeat, nextOccurrence } from './dates.js';
+import { addDays, dayKey, diffDays, isRepeat, nextOccurrence, toTimestamp } from './dates.js';
 import { MONEY_CATS, SHOP_SECTIONS, shopSection } from './sort.js';
 
 export const STORAGE_KEY = 'paewai:v1';
 export const FOCUS_PRESETS = [5, 15, 25, 50];
 
 export function emptyState() {
-  return { v: 1, tasks: [], notes: {}, memos: [], shop: [], money: [], focus: null, focusLog: {}, prefs: {} };
+  return {
+    v: 2,
+    tasks: [],
+    notes: {},
+    memos: [],
+    shop: [],
+    money: [],
+    focus: null,
+    focusLog: {},
+    prefs: {},
+    // Shared between devices (lib/sync.js): when each day's note changed, what was deleted, settings.
+    notesAt: {},
+    tomb: {},
+    settings: {},
+    settingsAt: 0,
+  };
 }
 
 let counter = 0;
@@ -41,6 +56,9 @@ export function sanitize(raw) {
       alerted: !!t.alerted,
       repeat: day && isRepeat(t.repeat) ? t.repeat : null,
       streak: t.repeat && Number.isInteger(t.streak) && t.streak > 0 ? t.streak : 0,
+      ...(Number.isFinite(t.lastDoneAt) ? { lastDoneAt: t.lastDoneAt } : {}),
+      ...(day && Number.isFinite(t.snoozeAt) ? { snoozeAt: t.snoozeAt } : {}),
+      updatedAt: Number.isFinite(t.updatedAt) ? t.updatedAt : Number.isFinite(t.createdAt) ? t.createdAt : 0,
     });
   }
   const ids = new Set();
@@ -63,6 +81,7 @@ export function sanitize(raw) {
       done: !!i.done,
       doneAt: i.done && Number.isFinite(i.doneAt) ? i.doneAt : null,
       createdAt: when(i.createdAt),
+      updatedAt: Number.isFinite(i.updatedAt) ? i.updatedAt : Number.isFinite(i.createdAt) ? i.createdAt : 0,
     });
   }
   for (const e of Array.isArray(raw.money) ? raw.money : []) {
@@ -73,6 +92,7 @@ export function sanitize(raw) {
       amount: Math.round(e.amount * 100) / 100,
       cat: MONEY_CATS.includes(e.cat) ? e.cat : 'อื่น ๆ',
       at: when(e.at),
+      updatedAt: Number.isFinite(e.updatedAt) ? e.updatedAt : Number.isFinite(e.at) ? e.at : 0,
     });
   }
   if (raw.notes && typeof raw.notes === 'object') {
@@ -91,6 +111,18 @@ export function sanitize(raw) {
     };
   }
   if (raw.prefs && typeof raw.prefs === 'object') state.prefs = { ...raw.prefs };
+  const times = (obj, keyOk) => {
+    const out = {};
+    if (obj && typeof obj === 'object') for (const [k, v] of Object.entries(obj)) if (keyOk(k) && Number.isFinite(v) && v > 0) out[k] = v;
+    return out;
+  };
+  state.notesAt = times(raw.notesAt, isDay);
+  state.tomb = times(raw.tomb, (k) => typeof k === 'string' && k.length <= 64);
+  if (raw.settings && typeof raw.settings === 'object' && !Array.isArray(raw.settings)) {
+    const budget = Number(raw.settings.budget);
+    if (budget > 0) state.settings.budget = Math.round(budget);
+  }
+  state.settingsAt = Number.isFinite(raw.settingsAt) ? raw.settingsAt : 0;
   return state;
 }
 
@@ -124,11 +156,29 @@ export function toggleDone(state, id, now = Date.now()) {
       const today = dayKey(new Date(now));
       let next = nextOccurrence(t.repeat, t.day);
       while (next < today) next = nextOccurrence(t.repeat, next);
-      return { ...t, day: next, alerted: false, streak: (t.streak ?? 0) + 1, lastDoneAt: now };
+      return { ...unsnoozed(t), day: next, alerted: false, streak: (t.streak ?? 0) + 1, lastDoneAt: now };
     }
-    return { ...t, done: !t.done, doneAt: t.done ? null : now };
+    return { ...unsnoozed(t), done: !t.done, doneAt: t.done ? null : now };
   });
 }
+
+const unsnoozed = (t) => {
+  if (t.snoozeAt == null) return t;
+  const { snoozeAt, ...rest } = t;
+  return rest;
+};
+
+/** "เลื่อน 10 นาที": rings again later without moving the task (a repeating one keeps its usual time). */
+export function snoozeTask(state, id, minutes = 10, now = Date.now()) {
+  return update(state, id, (t) => {
+    if (t.done || !t.day) return t;
+    const due = t.time ? toTimestamp(t.day, t.time) : now;
+    return { ...t, snoozeAt: Math.max(now, due) + Math.round(minutes * 60_000), alerted: false };
+  });
+}
+
+/** When a task rings: the snooze time, or its day and time. */
+export const ringAt = (t) => t.snoozeAt ?? (t.day && t.time ? toTimestamp(t.day, t.time) : null);
 
 export function setRepeat(state, id, repeat) {
   return update(state, id, (t) => ({ ...t, repeat: t.day && isRepeat(repeat) ? repeat : null }));
@@ -145,14 +195,17 @@ export function editTask(state, id, changes) {
       next.time = null;
       next.repeat = null;
     }
-    if (next.day !== t.day || next.time !== t.time) next.alerted = false;
+    if (next.day !== t.day || next.time !== t.time) {
+      next.alerted = false;
+      delete next.snoozeAt;
+    }
     return next;
   });
 }
 
 /** Move to a day (or null = กล่อง). Keeps the time only when staying on the same day. */
 export function moveTask(state, id, day) {
-  return update(state, id, (t) => ({ ...t, day: day ?? null, time: day && day === t.day ? t.time : null, repeat: day ? t.repeat : null, alerted: false }));
+  return update(state, id, (t) => ({ ...unsnoozed(t), day: day ?? null, time: day && day === t.day ? t.time : null, repeat: day ? t.repeat : null, alerted: false }));
 }
 
 export function deleteTask(state, id) {
@@ -173,7 +226,7 @@ export function clearDone(state, today) {
 export function carryOver(state, today) {
   return {
     ...state,
-    tasks: state.tasks.map((t) => (!t.done && t.day && t.day < today ? { ...t, day: today, time: null, alerted: false } : t)),
+    tasks: state.tasks.map((t) => (!t.done && t.day && t.day < today ? { ...unsnoozed(t), day: today, time: null, alerted: false } : t)),
   };
 }
 
@@ -216,7 +269,9 @@ export function dueTasks(state, now = Date.now()) {
   const date = new Date(now);
   const today = dayKey(date);
   const hhmm = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
-  return state.tasks.filter((t) => !t.done && !t.alerted && t.time && (t.day < today || (t.day === today && t.time <= hhmm)));
+  return state.tasks.filter(
+    (t) => !t.done && !t.alerted && t.time && (t.snoozeAt != null ? t.snoozeAt <= now : t.day < today || (t.day === today && t.time <= hhmm)),
+  );
 }
 
 export function stats(state, today, now = Date.now()) {
@@ -347,6 +402,27 @@ export function editMoney(state, id, changes) {
   };
 }
 
+/** Monthly budget (shared between devices); 0 or less = no budget. */
+export function setBudget(state, amount) {
+  const settings = { ...(state.settings ?? {}) };
+  if (amount > 0) settings.budget = Math.round(amount);
+  else delete settings.budget;
+  return { ...state, settings };
+}
+
+/** { budget, spent, left, ratio, daysLeft (incl. today), perDay } for this month, or null without a budget. */
+export function budgetStatus(state, today) {
+  const budget = state.settings?.budget;
+  if (!(budget > 0)) return null;
+  const month = today.slice(0, 7);
+  const spent = Math.round(state.money.filter((e) => dayKey(new Date(e.at)).startsWith(month)).reduce((n, e) => n + e.amount, 0) * 100) / 100;
+  const [y, m] = month.split('-').map(Number);
+  const lastDay = dayKey(new Date(y, m, 0));
+  const daysLeft = diffDays(today, lastDay) + 1;
+  const left = Math.round((budget - spent) * 100) / 100;
+  return { budget, spent, left, ratio: spent / budget, daysLeft, perDay: left > 0 ? Math.floor(left / daysLeft) : 0 };
+}
+
 export function deleteMoney(state, id) {
   return { ...state, money: state.money.filter((e) => e.id !== id) };
 }
@@ -374,6 +450,30 @@ export function moneySummary(state, today) {
     byCat: Object.entries(byCat).map(([cat, total]) => ({ cat, total: Math.round(total * 100) / 100 })).sort((a, b) => b.total - a.total),
     days: Object.entries(days).map(([day, items]) => ({ day, items, total: sum(items) })),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Restore from a backup file: adds back what is missing, never removes what is here
+// (with sync on, removing would remove it from every device).
+
+export function restoreFrom(state, backup) {
+  let added = 0;
+  const out = { ...state };
+  for (const list of ['tasks', 'memos', 'shop', 'money']) {
+    const have = new Set(state[list].map((i) => i.id));
+    const missing = backup[list].filter((i) => !have.has(i.id));
+    added += missing.length;
+    if (missing.length) out[list] = [...state[list], ...missing];
+  }
+  const notes = { ...state.notes };
+  for (const [day, text] of Object.entries(backup.notes)) {
+    if (notes[day]) continue;
+    notes[day] = text;
+    added++;
+  }
+  out.notes = notes;
+  if (!state.settings?.budget && backup.settings?.budget) out.settings = { ...state.settings, budget: backup.settings.budget };
+  return added || out.settings !== state.settings ? { state: out, added } : { state, added: 0 };
 }
 
 // ---------------------------------------------------------------------------

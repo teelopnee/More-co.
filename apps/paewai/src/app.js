@@ -2,8 +2,11 @@
 
 import { addDays, dayKey, dayLabel, describeWhen, diffDays, fromKey, longDate, parseWhen, repeatLabel, shortDate, timeOf, toTimestamp } from './lib/dates.js';
 import * as S from './lib/store.js';
-import { MONEY_CATS, classify, findAmount } from './lib/sort.js';
+import { MONEY_CATS, classify, findAmount, pastedLines } from './lib/sort.js';
 import { icsFileName, taskToICS } from './lib/ics.js';
+import * as Y from './lib/sync.js';
+import { GitHubRepo, explain } from './lib/github.js';
+import * as C from './lib/claude.js';
 
 const VERSION = 'dev';
 
@@ -19,6 +22,10 @@ const android = window.PaewaiAndroid ?? null;
 const mode = new URLSearchParams(location.search).get('mode') ?? '';
 document.documentElement.classList.toggle('android', !!android);
 document.documentElement.classList.toggle('panel', mode === 'panel');
+document.documentElement.dataset.view = 'tasks';
+// iPhone / iPad (an iPad says it is a Mac, but has a touch screen)
+const ios = /iP(?:hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+document.documentElement.classList.toggle('ios', ios);
 
 // ---------------------------------------------------------------------------
 // State
@@ -30,6 +37,7 @@ let view = 'tasks';
 let noteDay = today;
 let dropWhen = false; // the person tapped × on the parsed date
 let editingId = null;
+let engaged = false; // the person tapped or typed in the composer since it got focus
 let installPrompt = null;
 
 function load() {
@@ -42,13 +50,14 @@ function load() {
   return S.emptyState();
 }
 
-function save() {
+function save({ sync = true } = {}) {
   try {
     localStorage.setItem(S.STORAGE_KEY, JSON.stringify(state));
   } catch {
     toast('บันทึกไม่ได้ ที่เก็บข้อมูลในเครื่องเต็มหรือถูกปิดไว้');
   }
   syncAndroid();
+  if (sync) scheduleSync();
 }
 
 /** Tells the Android app what the notch pill shows and which alarms to set. */
@@ -57,7 +66,7 @@ function syncAndroid() {
   const now = Date.now();
   const reminders = state.tasks
     .filter((t) => !t.done && t.day && t.time)
-    .map((t) => ({ id: t.id, at: toTimestamp(t.day, t.time), title: `ถึงเวลา ${t.time} น.`, text: t.text }))
+    .map((t) => ({ id: t.id, at: S.ringAt(t), title: `ถึงเวลา ${t.time} น.`, text: t.text }))
     .filter((r) => r.at > now);
   const f = state.focus;
   if (f?.endsAt) {
@@ -130,7 +139,7 @@ function animated(update) {
 function commit(next, { undoable = false, redraw = true, animate = false } = {}) {
   if (next === state) return;
   if (undoable) undoState = state;
-  state = next;
+  state = Y.stamp(state, next);
   save();
   if (!redraw) return;
   if (animate) rendered = animated(render);
@@ -142,7 +151,7 @@ function commit(next, { undoable = false, redraw = true, animate = false } = {})
 
 function undo() {
   if (!undoState) return;
-  state = undoState;
+  state = Y.stamp(state, undoState);
   undoState = null;
   save();
   rendered = animated(render);
@@ -151,6 +160,8 @@ function undo() {
 
 /** A short tick on devices that can vibrate. */
 function buzz(ms = 8) {
+  // Browsers refuse (and log) a vibration before the first tap.
+  if (navigator.userActivation && !navigator.userActivation.hasBeenActive) return;
   try {
     navigator.vibrate?.(ms);
   } catch {
@@ -204,6 +215,7 @@ function taskItem(t, { withDay = false } = {}) {
     const label = dayLabel(t.day, today);
     badges.push(`<span class="badge late">${label === 'เมื่อวาน' ? 'ค้างจากเมื่อวาน' : `ค้างจาก ${esc(label)}`}</span>`);
   }
+  if (t.snoozeAt && !t.done && t.snoozeAt > Date.now()) badges.push(`<span class="badge soon">${icon('i-clock')}เลื่อนถึง ${esc(timeOf(new Date(t.snoozeAt)))}</span>`);
   if (t.repeat) badges.push(`<span class="badge rep">${icon('i-repeat')}${esc(repeatLabel(t.repeat))}${t.streak > 1 ? ` · ทำแล้ว ${t.streak} ครั้ง` : ''}</span>`);
   if (URL_RE.test(t.text)) badges.push(`<span class="badge">${icon('i-link')}ลิงก์</span>`);
   const later = !t.day || t.day < today ? 'วันนี้' : 'วันถัดไป';
@@ -239,7 +251,8 @@ function renderHero() {
   if (view === 'money') {
     const m = S.moneySummary(state, today);
     $('#hero-title').textContent = m.today ? `วันนี้ใช้ไป ${baht(m.today)}` : 'วันนี้ยังไม่ได้ใช้เงิน';
-    $('#hero-greet').textContent = `7 วัน ${baht(m.weekTotal)} · เดือนนี้ ${baht(m.month)}`;
+    const b = S.budgetStatus(state, today);
+    $('#hero-greet').textContent = `7 วัน ${baht(m.weekTotal)} · เดือนนี้ ${baht(m.month)}${b ? ` · ${b.left >= 0 ? `เหลืองบ ${baht(b.left)}` : `เกินงบ ${baht(-b.left)}`}` : ''}`;
     $('#hero-sub').innerHTML = '';
     return;
   }
@@ -369,7 +382,9 @@ function updateHint() {
     dropWhen = false;
     forceKind = null;
     hint.dataset.sig = '';
-    if (!hint.querySelector('.chip') || hint.querySelector('.kind-chip')) hint.innerHTML = `<span class="chip-label">ใส่วัน</span>${quickChips()}`;
+    // Day chips only while the person is using the composer: otherwise they sit over the page.
+    if (document.activeElement !== input || !engaged) hint.innerHTML = '';
+    else if (!hint.querySelector('.chip') || hint.querySelector('.kind-chip')) hint.innerHTML = `<span class="chip-label">ใส่วัน</span>${quickChips()}`;
     return;
   }
   // A choice holds while the text is only extended or trimmed, not when it is replaced.
@@ -453,8 +468,28 @@ addEventListener('resize', () => {
   if (!typing) fullHeight = innerHeight;
   document.body.classList.toggle('kb', typing && innerHeight < fullHeight - 150);
 });
-input.addEventListener('focus', () => (fullHeight = Math.max(fullHeight, innerHeight)));
-input.addEventListener('blur', () => document.body.classList.remove('kb'));
+input.addEventListener('focus', () => {
+  fullHeight = Math.max(fullHeight, innerHeight);
+  updateHint();
+});
+input.addEventListener('blur', () => {
+  document.body.classList.remove('kb');
+  setTimeout(() => {
+    if (document.activeElement === input) return;
+    engaged = false;
+    updateHint();
+  }, 250);
+});
+// The page focuses the composer on its own (for hardware keyboards); the day chips wait for a tap or a key.
+for (const type of ['pointerdown', 'keydown']) {
+  input.addEventListener(type, () => {
+    if (engaged) return;
+    engaged = true;
+    queueMicrotask(updateHint);
+  });
+}
+// Tapping a chip keeps the typing focus (and the on-screen keyboard) in the composer.
+hint.addEventListener('mousedown', (e) => e.target.closest('button') && e.preventDefault());
 input.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   if (input.value) {
@@ -468,8 +503,7 @@ input.addEventListener('keydown', (e) => {
 
 // Several lines pasted at once = several things, each sorted on its own.
 input.addEventListener('paste', (e) => {
-  const text = e.clipboardData?.getData('text/plain') ?? '';
-  const lines = text.split(/\r?\n/).map((l) => l.replace(/^\s*(?:[-*•☐]|\d+[.)])\s*/u, '').trim()).filter(Boolean);
+  const lines = pastedLines(e.clipboardData?.getData('text/plain') ?? '');
   if (lines.length < 2) return;
   e.preventDefault();
   let next = state;
@@ -555,6 +589,7 @@ if (Speech) {
 
 function setView(next) {
   view = next;
+  document.documentElement.dataset.view = next;
   for (const tab of $$('.tabs [role="tab"]')) tab.setAttribute('aria-selected', String(tab.dataset.view === next));
   for (const id of ['tasks', 'notes', 'money', 'focus']) $(`#view-${id}`).hidden = id !== next;
   moveInk();
@@ -819,6 +854,21 @@ function renderMoney() {
   $('#m-overview').hidden = !has;
   $('#m-empty').hidden = has;
   $('#m-today').textContent = baht(m.today);
+  const b = S.budgetStatus(state, today);
+  const box = $('#m-budget');
+  box.classList.toggle('unset', !b);
+  box.classList.toggle('over', !!b && b.left < 0);
+  box.classList.toggle('tight', !!b && b.left >= 0 && b.ratio > 0.85);
+  if (b) {
+    $('#m-budget-title').textContent = `งบเดือนนี้ ${baht(b.budget)}`;
+    $('#m-budget-left').textContent = b.left >= 0 ? `เหลือ ${baht(b.left)}` : `เกิน ${baht(-b.left)}`;
+    $('#m-budget-bar').style.setProperty('--w', `${Math.min(100, b.ratio * 100).toFixed(1)}%`);
+    $('#m-budget-sub').textContent = b.left > 0 ? `ใช้ได้อีกวันละ ${baht(b.perDay)} · อีก ${b.daysLeft} วันจะสิ้นเดือน` : 'ใช้เกินงบแล้ว ลองชะลอรายจ่ายที่ไม่จำเป็น';
+  } else {
+    $('#m-budget-title').textContent = 'ตั้งงบรายเดือน';
+    $('#m-budget-left').textContent = '';
+    $('#m-budget-sub').textContent = 'บอกได้ว่าเหลือใช้วันละเท่าไรถึงสิ้นเดือน';
+  }
   $('#m-week').textContent = baht(m.weekTotal);
   $('#m-month').textContent = baht(m.month);
   const max = Math.max(1, ...m.week.map((w) => w.total));
@@ -840,8 +890,25 @@ function renderMoney() {
 }
 
 $('#view-money').addEventListener('click', (e) => {
+  if (e.target.closest('[data-action="budget"]')) {
+    const form = $('#budget-form');
+    form.budget.value = state.settings?.budget ?? '';
+    $('#budget-dialog').showModal();
+    return;
+  }
   const id = e.target.closest('[data-money]')?.dataset.money;
   if (id) openItem('money', id);
+});
+
+$('#budget-form').addEventListener('submit', () => {
+  const amount = Number($('#budget-form').budget.value);
+  commit(S.setBudget(state, amount > 0 ? amount : 0));
+  toast(amount > 0 ? `ตั้งงบ ${baht(Math.round(amount))} ต่อเดือนแล้ว` : 'ไม่ตั้งงบแล้ว');
+});
+$('[data-budget="clear"]').addEventListener('click', () => {
+  $('#budget-dialog').close();
+  commit(S.setBudget(state, 0));
+  toast('ไม่ตั้งงบแล้ว');
 });
 
 // One sheet edits a quick note, a thing to buy, or an expense.
@@ -1010,6 +1077,12 @@ taskForm.addEventListener('click', async (e) => {
     toast('ลบแล้ว', { label: 'เลิกทำ', run: undo });
   }
   if (act === 'link') window.open(t.text.match(URL_RE)[0], '_blank', 'noopener');
+  if (act === 'claude') {
+    saveTask();
+    taskDialog.close();
+    openClaude(C.breakdownPrompt(state.tasks.find((x) => x.id === t.id) ?? t, today));
+    return;
+  }
   if (act === 'focus') {
     saveTask();
     taskDialog.close();
@@ -1064,7 +1137,7 @@ function renderNoteHead() {
 }
 
 note.addEventListener('input', () => {
-  state = S.setNote(state, noteDay, note.value);
+  state = Y.stamp(state, S.setNote(state, noteDay, note.value));
   clearTimeout(noteTimer);
   noteTimer = setTimeout(save, 300);
 });
@@ -1203,9 +1276,34 @@ function checkDue() {
   commit(S.markAlerted(state, due.map((t) => t.id)));
   if (!fresh.length) return;
   chime();
-  toast(`ถึงเวลา: ${fresh[0].text}${fresh.length > 1 ? ` และอีก ${fresh.length - 1} เรื่อง` : ''}`);
-  for (const t of fresh) notify(`ถึงเวลา ${t.time} น.`, t.text);
+  toast(`ถึงเวลา: ${fresh[0].text}${fresh.length > 1 ? ` และอีก ${fresh.length - 1} เรื่อง` : ''}`, fresh.length === 1 ? { label: 'เลื่อน 10 นาที', run: () => snooze(fresh[0].id) } : undefined);
+  for (const t of fresh) notify(`ถึงเวลา ${t.time} น.`, t.text, t.id);
 }
+
+/** From a notification button or the toast: ring again in a few minutes. */
+function snooze(id, minutes = 10) {
+  const t = state.tasks.find((x) => x.id === id);
+  if (!t || t.done) return;
+  commit(S.snoozeTask(state, id, minutes, Date.now()), { undoable: true });
+  toast(`เลื่อน “${t.text}” ไป ${timeOf(new Date(S.ringAt(state.tasks.find((x) => x.id === id))))} น.`, { label: 'เลิกทำ', run: undo });
+}
+
+function markDone(id) {
+  const t = state.tasks.find((x) => x.id === id);
+  if (!t || t.done) return;
+  commit(S.toggleDone(state, id, Date.now()), { undoable: true, animate: true });
+  toast(t.repeat ? `เสร็จแล้ว รอบหน้า${describeWhen(state.tasks.find((x) => x.id === id).day, t.time, today)}` : `เสร็จแล้ว: ${t.text}`, { label: 'เลิกทำ', run: undo });
+}
+
+// Buttons on a notification (service worker → this page)
+navigator.serviceWorker?.addEventListener('message', (e) => {
+  const { type, action, id } = e.data ?? {};
+  if (type !== 'notification-action') return;
+  state = load();
+  if (action === 'snooze') snooze(id);
+  if (action === 'done') markDone(id);
+});
+navigator.serviceWorker?.startMessages?.();
 
 let audio = null;
 function unlockAudio() {
@@ -1242,12 +1340,18 @@ function chime() {
   }
 }
 
-async function notify(title, body) {
+async function notify(title, body, id = null) {
   // In the Android app the alarms set through syncAndroid() notify instead.
   if (android || !('Notification' in window) || Notification.permission !== 'granted') return;
   try {
     const reg = await navigator.serviceWorker?.getRegistration();
-    if (reg) await reg.showNotification(title, { body, icon: 'icons/icon-192.png', tag: `${title}|${body}`, lang: 'th' });
+    const actions = id
+      ? [
+          { action: 'snooze', title: 'เลื่อน 10 นาที' },
+          { action: 'done', title: 'เสร็จแล้ว' },
+        ]
+      : [];
+    if (reg) await reg.showNotification(title, { body, icon: 'icons/icon-192.png', tag: id ?? `${title}|${body}`, lang: 'th', data: { id }, actions });
     else new Notification(title, { body, icon: 'icons/icon-192.png' });
   } catch {
     // notifications blocked
@@ -1266,7 +1370,10 @@ $('#menu-btn').addEventListener('click', () => {
 function refreshMenu() {
   for (const b of $$('[data-menu="install"]')) b.hidden = !installPrompt;
   $('[data-menu="notify"]').hidden = !!android || !('Notification' in window) || Notification.permission === 'granted';
-  $('#installed-note').hidden = !matchMedia('(display-mode: standalone)').matches;
+  const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+  $('#installed-note').hidden = !standalone;
+  $('#installed-note-ios').hidden = !standalone;
+  renderSyncStatus();
   renderAndroid();
 }
 
@@ -1312,6 +1419,17 @@ document.addEventListener('click', async (e) => {
   const item = e.target.closest('[data-menu]')?.dataset.menu;
   if (!item) {
     if (e.target.closest('[data-action="guide-done"]')) commit({ ...state, prefs: { ...state.prefs, guideDone: true } });
+    return;
+  }
+  if (item === 'sync') {
+    menu.close();
+    $('#guide-dialog').close();
+    openSync();
+    return;
+  }
+  if (item === 'claude') {
+    menu.close();
+    openClaude();
     return;
   }
   if (item === 'guide') {
@@ -1374,11 +1492,15 @@ $('#import-file').addEventListener('change', async (e) => {
     toast('ไฟล์นี้ไม่ใช่ไฟล์สำรองของแปะไว้');
     return;
   }
-  if (!confirm(`แทนที่ข้อมูลตอนนี้ด้วยไฟล์สำรอง (${next.tasks.length} เรื่อง)?`)) return;
-  commit(next, { undoable: true });
-  syncNote();
+  const { state: merged, added } = S.restoreFrom(state, next);
   menu.close();
-  toast('กู้คืนแล้ว', { label: 'เลิกทำ', run: undo });
+  if (!added) {
+    toast('ทุกอย่างในไฟล์สำรองมีอยู่แล้ว');
+    return;
+  }
+  commit(merged, { undoable: true });
+  syncNote();
+  toast(`กู้คืน ${added} รายการที่หายไป (ของที่มีอยู่ไม่ถูกแตะ)`, { label: 'เลิกทำ', run: undo });
 });
 
 /** Saves a file: the share sheet where it can take files, else a download. */
@@ -1453,6 +1575,8 @@ function handleLaunch() {
     const res = capture(parts.join(' '), { shared: true });
     if (res && !res.error) toast(`รับมาแล้ว: ${res.msg}`, { label: 'เลิกทำ', run: undo });
   }
+  if (params.get('snooze')) snooze(params.get('snooze'));
+  if (params.get('done')) markDone(params.get('done'));
   const v = params.get('view');
   if (['notes', 'money', 'focus'].includes(v)) setView(v);
   const minutes = Number(params.get('focus'));
@@ -1471,6 +1595,11 @@ function persistOnce() {
 }
 
 window.addEventListener('storage', (e) => {
+  if (e.key === Y.SYNC_KEY) {
+    syncCfg = loadSyncCfg();
+    renderSyncStatus();
+    return;
+  }
   if (e.key !== S.STORAGE_KEY) return;
   state = load();
   render();
@@ -1495,6 +1624,7 @@ document.addEventListener('visibilitychange', () => {
   render();
   syncNote();
   checkDue();
+  scheduleSync(300);
   if (view === 'tasks' && !document.querySelector('dialog[open]') && document.activeElement === document.body) input.focus();
 });
 
@@ -1517,6 +1647,484 @@ function tick() {
 setInterval(tick, 1000);
 setInterval(checkDue, 15_000);
 
+// ---------------------------------------------------------------------------
+// Sync across devices: one JSON file in the person's own private GitHub repository (lib/sync.js)
+
+let syncCfg = loadSyncCfg(); // { repo, token, lastSync, error, errorAt } or null; never part of the data or backups
+let syncing = null;
+let syncTimer = 0;
+let syncPending = false;
+let syncAgain = false;
+
+function loadSyncCfg() {
+  try {
+    const c = JSON.parse(localStorage.getItem(Y.SYNC_KEY) ?? 'null');
+    return c && Y.cleanRepo(c.repo) && Y.looksLikeToken(c.token) ? c : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveSyncCfg() {
+  try {
+    if (syncCfg) localStorage.setItem(Y.SYNC_KEY, JSON.stringify(syncCfg));
+    else localStorage.removeItem(Y.SYNC_KEY);
+  } catch {
+    // storage blocked: works until the page closes
+  }
+}
+
+function deviceName() {
+  const ua = navigator.userAgent;
+  if (android) return 'แอป Android';
+  if (ios) return /iPhone/.test(ua) ? 'iPhone' : 'iPad';
+  if (/Android/.test(ua)) return /Mobile/.test(ua) ? 'มือถือ Android' : 'แท็บเล็ต Android';
+  if (/Windows/.test(ua)) return 'Windows';
+  if (/Mac/.test(ua)) return 'Mac';
+  return 'เว็บ';
+}
+
+/** Syncs a moment later, so a burst of changes becomes one commit. Backs off after an error. */
+function scheduleSync(ms = 2500) {
+  if (!syncCfg) return;
+  if (syncCfg.errorAt) ms = Math.max(ms, 120_000 - (Date.now() - syncCfg.errorAt));
+  syncPending = true;
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(() => runSync(), ms);
+}
+
+function runSync({ manual = false } = {}) {
+  const cfg = syncCfg;
+  if (!cfg) return Promise.resolve();
+  if (syncing) {
+    syncAgain = true;
+    return syncing;
+  }
+  if (!manual && navigator.onLine === false) return Promise.resolve();
+  clearTimeout(syncTimer);
+  syncPending = false;
+  const before = state;
+  syncing = Y.syncOnce({
+    gh: new GitHubRepo(cfg),
+    local: before,
+    add: (st, line, now) => route(st, classify(line, now), now),
+    readFile: S.sanitize,
+    device: deviceName(),
+  })
+    .then((res) => {
+      if (syncCfg?.token !== cfg.token) return;
+      applySynced(before, res.state);
+      syncCfg = { ...syncCfg, lastSync: Date.now(), error: '', errorAt: 0 };
+      saveSyncCfg();
+      if (res.inbox) toast(`รับ ${res.inbox} เรื่องที่ส่งมาจากคำสั่งลัดหรือ Claude แล้ว`);
+    })
+    .catch((err) => {
+      if (syncCfg?.token !== cfg.token) return;
+      syncCfg = { ...syncCfg, error: explain(err), errorAt: Date.now() };
+      saveSyncCfg();
+    })
+    .finally(() => {
+      syncing = null;
+      renderSyncStatus();
+      if (syncAgain) {
+        syncAgain = false;
+        scheduleSync(300);
+      }
+    });
+  renderSyncStatus();
+  return syncing;
+}
+
+/** Takes in what the sync brought. Edits made here while it ran are newer and stay (the next sync sends them). */
+function applySynced(before, synced) {
+  if (synced === before) return;
+  const next = state === before ? synced : Y.merge(state, synced);
+  if (next === state) return;
+  state = next;
+  undoState = null; // an undo now could bring back what another device removed
+  save({ sync: state !== synced });
+  rendered = animated(render);
+  if (document.activeElement === note) renderNoteHead();
+  else syncNote();
+}
+
+function renderSyncStatus() {
+  const on = !!syncCfg;
+  const err = syncCfg?.error;
+  const status = !on ? '' : syncing ? 'กำลังซิงก์…' : err ? err : syncCfg.lastSync ? `ซิงก์แล้ว ${ago(syncCfg.lastSync)}` : 'รอซิงก์ครั้งแรก';
+  $('#sync-menu-status').textContent = !on ? 'แท็บเล็ต · มือถือ · iPhone' : err ? 'มีปัญหา แตะเพื่อดู' : status;
+  $('#sync-menu-status').classList.toggle('bad', !!err);
+  $('#store-note').textContent = on ? 'เก็บในเครื่องนี้และใน GitHub ของคุณ' : 'เก็บในเครื่องนี้เท่านั้น';
+  $('#sync-on').hidden = !on;
+  $('#sync-off').hidden = on;
+  if (!on) return;
+  $('#sync-repo').textContent = syncCfg.repo;
+  for (const el of $$('.sync-repo-name')) el.textContent = syncCfg.repo;
+  $('#sync-status').textContent = status;
+  $('#sync-dot').className = `sync-dot ${syncing ? 'busy' : err ? 'bad' : 'ok'}`;
+  $('#sync-repo-link').href = `https://github.com/${syncCfg.repo}`;
+  $('#shortcut-url').value = `https://api.github.com/repos/${syncCfg.repo}/contents/${Y.INBOX_DIR}/`;
+  $('#shortcut-auth').value = `Bearer ${syncCfg.token}`;
+}
+
+const syncDialog = $('#sync-dialog');
+
+function openSync(code = '') {
+  showSyncNote('');
+  $('#sync-pair').hidden = true;
+  renderSyncStatus();
+  if (code) {
+    const cfg = Y.readPairCode(code);
+    if (syncCfg) showSyncNote(`เครื่องนี้เชื่อมกับ ${syncCfg.repo} อยู่แล้ว ถ้าจะเปลี่ยน กด “เลิกซิงก์ในเครื่องนี้” ก่อน`);
+    else if (cfg) {
+      $('#pair-input').value = code;
+      showSyncNote(`เชื่อมกับ repo ${cfg.repo} ไหม? กด “เชื่อม” ถ้าโค้ดนี้มาจากเครื่องของคุณเอง`, 'info');
+    }
+  }
+  if (!syncDialog.open) syncDialog.showModal();
+}
+
+function showSyncNote(message, tone = 'bad') {
+  const el = $('#sync-error');
+  el.textContent = message;
+  el.dataset.tone = tone;
+  el.hidden = !message;
+}
+
+async function connectSync(cfg) {
+  showSyncNote('กำลังเชื่อม…', 'info');
+  const buttons = $$('[data-sync="connect"], [data-sync="join"]');
+  for (const b of buttons) b.disabled = true;
+  try {
+    const gh = new GitHubRepo(cfg);
+    const info = await gh.info();
+    if (!info.private) {
+      showSyncNote(`repo ${cfg.repo} เป็น Public ใครก็เห็นข้อมูลได้ ไปที่ Settings ของ repo → Change visibility → Private ก่อน แล้วเชื่อมใหม่`);
+      return;
+    }
+    syncCfg = { repo: info.fullName || cfg.repo, token: cfg.token, lastSync: 0, error: '', errorAt: 0 };
+    saveSyncCfg();
+    await runSync({ manual: true });
+    if (!syncCfg || syncCfg.error) {
+      const why = syncCfg?.error ?? '';
+      syncCfg = null;
+      saveSyncCfg();
+      renderSyncStatus();
+      showSyncNote(why || 'เชื่อมไม่สำเร็จ');
+      return;
+    }
+    // A guide next to the data, for people and for Claude (written once).
+    try {
+      if (!(await gh.read(Y.GUIDE_PATH))) await gh.write(Y.GUIDE_PATH, Y.DATA_GUIDE, null, 'แปะไว้: คู่มือข้อมูล (สำหรับคนและ Claude)');
+      const readme = `${Y.INBOX_DIR}/README.md`;
+      if (!(await gh.read(readme))) await gh.write(readme, Y.INBOX_README, null, 'แปะไว้: โฟลเดอร์ inbox');
+    } catch {
+      // optional
+    }
+    $('#sync-token-input').value = '';
+    $('#pair-input').value = '';
+    showSyncNote('');
+    renderSyncStatus();
+    toast('เชื่อมแล้ว รวมข้อมูลในเครื่องนี้กับ GitHub เรียบร้อย');
+  } catch (err) {
+    showSyncNote(explain(err));
+  } finally {
+    for (const b of buttons) b.disabled = false;
+  }
+}
+
+async function copyText(text, done = 'คัดลอกแล้ว') {
+  try {
+    if (android) {
+      if (!android.copyText(text)) throw new Error('no clipboard');
+    } else await navigator.clipboard.writeText(text);
+    if (done) toast(done);
+    return true;
+  } catch {
+    if (done) toast('คัดลอกไม่ได้ กดค้างที่ข้อความแล้วเลือกคัดลอก');
+    return false;
+  }
+}
+
+async function showPair() {
+  const box = $('#sync-pair');
+  if (!box.hidden) {
+    box.hidden = true;
+    return;
+  }
+  const link = Y.pairLink(syncCfg);
+  $('#sync-code').value = link;
+  $('[data-sync="share"]').hidden = android || !navigator.share;
+  box.hidden = false;
+  try {
+    const { default: qrcode } = await import('./vendor/qrcode.js');
+    const qr = qrcode(0, 'L');
+    qr.addData(link);
+    qr.make();
+    const n = qr.getModuleCount();
+    let d = '';
+    for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) if (qr.isDark(r, c)) d += `M${c} ${r}h1v1h-1z`;
+    $('#sync-qr').innerHTML = `<svg viewBox="-3 -3 ${n + 6} ${n + 6}" shape-rendering="crispEdges" aria-hidden="true"><rect x="-3" y="-3" width="${n + 6}" height="${n + 6}" fill="#fff"/><path d="${d}" fill="#000"/></svg>`;
+    $('#sync-qr').hidden = false;
+  } catch {
+    $('#sync-qr').hidden = true;
+  }
+  box.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+}
+
+let offArmed = 0;
+syncDialog.addEventListener('click', async (e) => {
+  const button = e.target.closest('[data-sync]');
+  const act = button?.dataset.sync;
+  if (!act) return;
+  if (act === 'connect') {
+    const repo = Y.cleanRepo($('#sync-repo-input').value);
+    const token = $('#sync-token-input').value.trim();
+    if (!repo) return showSyncNote('ใส่ชื่อ repo แบบ ชื่อผู้ใช้/ชื่อ repo เช่น teelopnee/paewai-data');
+    if (!Y.looksLikeToken(token)) return showSyncNote('โทเคนไม่ถูกรูปแบบ ต้องขึ้นต้นด้วย github_pat_');
+    await connectSync({ repo, token });
+  }
+  if (act === 'join') {
+    const cfg = Y.readPairCode($('#pair-input').value);
+    if (!cfg) return showSyncNote('โค้ดไม่ถูกต้อง คัดลอกใหม่จากเครื่องที่เชื่อมแล้ว (⋮ → ซิงก์ข้ามเครื่อง → เชื่อมเครื่องอื่น)');
+    await connectSync(cfg);
+  }
+  if (act === 'paste') {
+    try {
+      $('#pair-input').value = (await navigator.clipboard.readText()).trim();
+    } catch {
+      toast('กดค้างในช่องแล้วเลือก “วาง”');
+      $('#pair-input').focus();
+    }
+  }
+  if (act === 'now') {
+    await runSync({ manual: true });
+    toast(syncCfg?.error ? syncCfg.error : 'ซิงก์แล้ว');
+  }
+  if (act === 'pair') await showPair();
+  if (act === 'copy') copyText($('#sync-code').value, 'คัดลอกแล้ว ส่งไปเครื่องอื่นของคุณได้เลย');
+  if (act === 'share') navigator.share?.({ title: 'เชื่อมแปะไว้', url: $('#sync-code').value }).catch(() => {});
+  if (act === 'off') {
+    // Two taps: no browser confirm() (it does not show inside the Android app).
+    if (Date.now() - offArmed > 4000) {
+      offArmed = Date.now();
+      button.textContent = 'แตะอีกครั้งเพื่อเลิกซิงก์';
+      setTimeout(() => (button.textContent = 'เลิกซิงก์ในเครื่องนี้'), 4000);
+      return;
+    }
+    offArmed = 0;
+    button.textContent = 'เลิกซิงก์ในเครื่องนี้';
+    syncCfg = null;
+    saveSyncCfg();
+    renderSyncStatus();
+    toast('เลิกซิงก์ในเครื่องนี้แล้ว ข้อมูลยังอยู่ทั้งในเครื่องและใน GitHub');
+  }
+});
+
+document.addEventListener('click', (e) => {
+  const target = e.target.closest('[data-copy]')?.dataset.copy;
+  if (target) copyText($(target).value);
+});
+
+/** A pairing link (#pair=…) opened on this device: ask before joining. */
+function checkPairLink() {
+  const m = /#pair=([^&]+)/.exec(location.hash);
+  if (!m) return;
+  history.replaceState(null, '', location.pathname + location.search);
+  openSync(decodeURIComponent(m[1]));
+}
+
+setInterval(() => document.visibilityState === 'visible' && scheduleSync(0), 60_000);
+addEventListener('online', () => scheduleSync(300));
+document.addEventListener('visibilitychange', () => {
+  // Leaving the app: send what is waiting now rather than in a few seconds.
+  if (document.visibilityState === 'hidden' && syncPending) runSync();
+});
+
+// ---------------------------------------------------------------------------
+// Ask Claude (lib/claude.js): in the app with the person's API key, or in the Claude app
+
+const claudeDialog = $('#claude-dialog');
+let claudeCfg = loadClaudeCfg(); // { key, model } on this device only
+let claudeItems = [];
+let asking = null;
+
+function loadClaudeCfg() {
+  try {
+    const c = JSON.parse(localStorage.getItem(C.CLAUDE_KEY) ?? 'null');
+    return c && typeof c === 'object' ? c : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveClaudeCfg() {
+  try {
+    localStorage.setItem(C.CLAUDE_KEY, JSON.stringify(claudeCfg));
+  } catch {
+    // storage blocked
+  }
+}
+
+function openClaude(question = '') {
+  if (question) $('#claude-q').value = question;
+  $('#claude-key').value = claudeCfg.key ?? '';
+  $('#claude-model').value = C.MODELS.includes(claudeCfg.model) ? claudeCfg.model : C.DEFAULT_MODEL;
+  $('#claude-settings').open = false;
+  if (!claudeDialog.open) claudeDialog.showModal();
+  if (question && claudeCfg.key) askClaude();
+}
+
+/** Bold, bullets and paragraphs from Claude's text, safely. */
+function miniMarkdown(text) {
+  const blocks = [];
+  let list = [];
+  const flush = () => {
+    if (list.length) blocks.push(`<ul>${list.map((l) => `<li>${l}</li>`).join('')}</ul>`);
+    list = [];
+  };
+  const inline = (s) => esc(s).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  for (const raw of String(text).split('\n')) {
+    const line = raw.trim();
+    const bullet = /^(?:[-*•]|\d+[.)])\s+(.*)$/.exec(line);
+    if (bullet) list.push(inline(bullet[1]));
+    else {
+      flush();
+      if (line) blocks.push(`<p>${inline(line.replace(/^#+\s*/, ''))}</p>`);
+    }
+  }
+  flush();
+  return blocks.join('');
+}
+
+function claudeError(err, Anthropic) {
+  if (Anthropic && err instanceof Anthropic.APIUserAbortError) return '';
+  if (Anthropic && err instanceof Anthropic.AuthenticationError) return 'API key ใช้ไม่ได้ ตรวจที่ console.anthropic.com แล้วใส่ใหม่';
+  if (Anthropic && err instanceof Anthropic.PermissionDeniedError) return 'คีย์นี้ไม่มีสิทธิ์ใช้รุ่นนี้ ลองเปลี่ยนรุ่นในตั้งค่า';
+  if (Anthropic && err instanceof Anthropic.RateLimitError) return 'ถามถี่เกินไปหรือเครดิตหมด รอสักครู่แล้วลองใหม่';
+  if (Anthropic && err instanceof Anthropic.BadRequestError) return `ส่งคำถามไม่ได้: ${err.message}`;
+  if (Anthropic && err instanceof Anthropic.APIConnectionError) return 'ต่อ Claude ไม่ได้ ตรวจอินเทอร์เน็ตแล้วลองใหม่';
+  if (Anthropic && err instanceof Anthropic.APIError && (err.status ?? 0) >= 500) return 'Claude ยุ่งอยู่ ลองใหม่อีกครั้ง';
+  return err?.message || 'ถาม Claude ไม่สำเร็จ';
+}
+
+async function askClaude() {
+  const question = $('#claude-q').value.trim();
+  if (!question) {
+    toast('พิมพ์คำถาม หรือแตะคำถามสำเร็จรูปก่อน');
+    return;
+  }
+  if (!claudeCfg.key) {
+    $('#claude-settings').open = true;
+    $('#claude-key').focus();
+    toast('ใส่ API key ก่อน หรือใช้ “เปิดใน Claude” แทน');
+    return;
+  }
+  if (asking) return;
+  const out = $('#claude-out');
+  const button = $('[data-claude="ask"]');
+  out.hidden = false;
+  out.innerHTML = '<p class="thinking"><span class="dot-pulse" aria-hidden="true"></span>Claude กำลังคิด…</p>';
+  button.disabled = true;
+  const context = $('#claude-context').checked ? C.contextFor(state, today) : '';
+  let Anthropic = null;
+  try {
+    ({ Anthropic } = await import('./vendor/anthropic.js'));
+    const client = new Anthropic({ apiKey: claudeCfg.key, dangerouslyAllowBrowser: true });
+    asking = client.beta.messages.stream(C.request({ model: claudeCfg.model, question, context }));
+    showAnswer(C.readAnswer(await asking.finalMessage()));
+  } catch (err) {
+    const message = claudeError(err, Anthropic);
+    out.innerHTML = message ? `<p class="sync-error">${esc(message)}</p>` : '';
+    out.hidden = !message;
+  } finally {
+    asking = null;
+    button.disabled = false;
+  }
+}
+
+function showAnswer({ reply, items, note: why }) {
+  claudeItems = items;
+  const now = Date.now();
+  const rows = items.map((it, i) => {
+    const r = classify(it.text, now, { force: it.kind });
+    const when = r.kind === 'task' && r.day ? describeWhen(r.day, r.time, today) : r.kind === 'money' && r.amount ? baht(r.amount) : '';
+    const tone = r.kind === 'task' && r.day ? 'remind' : r.kind;
+    return `<li><label><input type="checkbox" data-i="${i}" checked><span class="kind-chip small k-${tone}">${esc(KIND_NAMES[r.kind])}</span><span class="suggest-text">${esc(r.kind === 'shop' && r.items.length > 1 ? r.items.map((x) => x.text).join(' · ') : r.text)}${when ? ` <em>${esc(when)}</em>` : ''}</span></label></li>`;
+  });
+  $('#claude-out').innerHTML =
+    `<div class="answer">${miniMarkdown(reply)}</div>` +
+    (why ? `<p class="dim small">${esc(why)}</p>` : '') +
+    (items.length
+      ? `<div class="suggest"><p class="suggest-title">แปะลงแอปได้เลย</p><ul>${rows.join('')}</ul><button type="button" class="primary" data-claude="add">แปะที่เลือก</button></div>`
+      : '') +
+    `<button type="button" class="text-btn" data-claude="copy">คัดลอกคำตอบ</button>`;
+}
+
+const KIND_NAMES = { task: 'งาน', note: 'โน้ต', shop: 'ซื้อ', money: 'จ่าย' };
+
+function addClaudeItems() {
+  const now = Date.now();
+  let next = state;
+  let n = 0;
+  for (const box of $$('#claude-out input[data-i]:checked')) {
+    const it = claudeItems[Number(box.dataset.i)];
+    if (!it) continue;
+    const r = classify(it.text, now, { force: it.kind });
+    if (r.kind === 'money' && !r.amount) continue;
+    next = route(next, r, now + n);
+    n++;
+  }
+  if (!n) {
+    toast('ยังไม่ได้เลือกอะไร');
+    return;
+  }
+  claudeDialog.close();
+  commit(next, { undoable: true, animate: true });
+  toast(`แปะ ${n} เรื่องจาก Claude แล้ว`, { label: 'เลิกทำ', run: undo });
+}
+
+function openInClaudeApp() {
+  const question = $('#claude-q').value.trim() || C.PRESETS.plan;
+  const prompt = C.webPrompt(question, $('#claude-context').checked ? C.contextFor(state, today) : '');
+  const link = C.webLink(prompt);
+  copyText(prompt, null);
+  const a = Object.assign(document.createElement('a'), { href: link, target: '_blank', rel: 'noopener' });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  toast(link === C.CLAUDE_WEB ? 'คัดลอกคำถามแล้ว วางในแชตของ Claude ได้เลย' : 'เปิด Claude แล้ว ได้คำตอบแล้วคัดลอกมาวางในช่องแปะ จะจัดให้ทีละบรรทัด');
+}
+
+claudeDialog.addEventListener('click', (e) => {
+  const preset = e.target.closest('[data-ask]')?.dataset.ask;
+  if (preset) {
+    $('#claude-q').value = C.PRESETS[preset];
+    if (claudeCfg.key) askClaude();
+    return;
+  }
+  const act = e.target.closest('[data-claude]')?.dataset.claude;
+  if (act === 'ask') askClaude();
+  if (act === 'open') openInClaudeApp();
+  if (act === 'add') addClaudeItems();
+  if (act === 'copy') copyText($('#claude-out .answer')?.innerText ?? '');
+});
+$('#claude-key').addEventListener('change', (e) => {
+  claudeCfg = { ...claudeCfg, key: e.target.value.trim() };
+  saveClaudeCfg();
+});
+$('#claude-model').addEventListener('change', (e) => {
+  claudeCfg = { ...claudeCfg, model: e.target.value };
+  saveClaudeCfg();
+});
+$('#claude-q').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault();
+    askClaude();
+  }
+});
+claudeDialog.addEventListener('close', () => asking?.abort());
+
 // Called by the Android app (MainActivity / PanelActivity).
 window.paewai = {
   reload() {
@@ -1525,6 +2133,7 @@ window.paewai = {
     syncNote();
     updateHint();
     renderAndroid();
+    scheduleSync(300);
   },
   focusCapture() {
     if (document.querySelector('dialog[open]')) return;
@@ -1534,6 +2143,14 @@ window.paewai = {
   },
   show(next) {
     if (['tasks', 'notes', 'money', 'focus'].includes(next)) setView(next);
+  },
+  snooze(id, minutes = 10) {
+    state = load();
+    snooze(String(id), Number(minutes) || 10);
+  },
+  done(id) {
+    state = load();
+    markDone(String(id));
   },
   addShared(text) {
     const res = capture(String(text), { shared: true });
@@ -1553,6 +2170,9 @@ handleLaunch();
 checkDue();
 syncAndroid();
 input.focus();
+checkPairLink();
+renderSyncStatus();
+scheduleSync(800);
 
 if (!android && 'serviceWorker' in navigator && location.protocol.startsWith('http')) {
   navigator.serviceWorker.register('sw.js').catch(() => {});

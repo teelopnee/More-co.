@@ -237,3 +237,22 @@ export function classify(input, now = Date.now(), { force = null, noDate = false
   if (kind === 'note') return { ...base, kind, why, text: raw, day: null, time: null, repeat: null };
   return { ...base, kind: 'task', why };
 }
+
+/**
+ * A pasted list (from LINE, Notes or a Claude answer) → one entry per line: bullets, checkboxes,
+ * numbering and **bold** are dropped, and so are headings ("## พรุ่งนี้", "ของต้องซื้อ:").
+ */
+export function pastedLines(text) {
+  return String(text ?? '')
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l && !/^#{1,6}\s/.test(l) && !/^[-*_=]{3,}$/.test(l))
+    .map((l) =>
+      l
+        .replace(/\*\*(.+?)\*\*|__(.+?)__/g, '$1$2')
+        .replace(/^(?:[-*+•▪◦☐☑✓✔]\s*|\d{1,3}[.)]\s+)+/u, '')
+        .replace(/^\[[ xX✓]?\]\s*/u, '')
+        .trim(),
+    )
+    .filter((l) => l && !/[:：]$/.test(l));
+}

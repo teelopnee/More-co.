@@ -232,3 +232,55 @@ test('sanitize keeps the new collections and drops junk', () => {
   assert.equal(s.money.length, 1);
   assert.deepEqual(S.sanitize({ tasks: [] }).shop, []);
 });
+
+test('snooze: rings again later without moving the task', () => {
+  const now = new Date(2026, 10, 8, 20, 0).getTime();
+  let s = S.addTask(S.emptyState(), { text: 'กินยา', day: '2026-11-08', time: '20:00', repeat: 'daily' }, now - 60_000);
+  s = S.addTask(s, { text: 'ส่งรายงาน', day: '2026-11-08', time: '19:55' }, now - 60_000);
+  const [pill, report] = s.tasks.map((t) => t.id);
+  assert.deepEqual(S.dueTasks(s, now).map((t) => t.text), ['กินยา', 'ส่งรายงาน']);
+  s = S.markAlerted(s, [pill, report]);
+  s = S.snoozeTask(s, pill, 10, now + 30_000);
+  assert.equal(s.tasks[0].time, '20:00', 'the daily time stays');
+  assert.equal(S.ringAt(s.tasks[0]), now + 30_000 + 10 * 60_000);
+  assert.deepEqual(S.dueTasks(s, now + 5 * 60_000), []);
+  assert.deepEqual(S.dueTasks(s, now + 11 * 60_000).map((t) => t.text), ['กินยา']);
+  // ticking it off clears the snooze and moves the daily task on
+  s = S.toggleDone(s, pill, now + 12 * 60_000);
+  assert.equal(s.tasks[0].snoozeAt, undefined);
+  assert.equal(s.tasks[0].day, '2026-11-09');
+  // a snooze survives saving; a new time drops it
+  s = S.snoozeTask(s, report, 10, now);
+  assert.equal(S.sanitize(JSON.parse(JSON.stringify(s))).tasks[1].snoozeAt, s.tasks[1].snoozeAt);
+  assert.equal(S.editTask(s, report, { time: '21:00' }).tasks[1].snoozeAt, undefined);
+  const inbox = S.addTask(s, { text: 'ไม่มีวัน' });
+  assert.equal(S.snoozeTask(inbox, inbox.tasks.at(-1).id, 10, now).tasks.at(-1).snoozeAt, undefined, 'nothing to snooze without a day');
+});
+
+test('monthly budget', () => {
+  const at = (d, h = 12) => new Date(2026, 10, d, h).getTime();
+  let s = S.emptyState();
+  assert.equal(S.budgetStatus(s, '2026-11-08'), null);
+  s = S.setBudget(s, 9000);
+  s = S.addMoney(s, { text: 'ค่าเช่า', amount: 3000, cat: 'บิล ค่าบ้าน' }, at(1));
+  s = S.addMoney(s, { text: 'ข้าว', amount: 450.5, cat: 'อาหาร' }, at(8));
+  s = S.addMoney(s, { text: 'เดือนก่อน', amount: 999, cat: 'อื่น ๆ' }, new Date(2026, 9, 31).getTime());
+  const b = S.budgetStatus(s, '2026-11-08');
+  assert.deepEqual(b, { budget: 9000, spent: 3450.5, left: 5549.5, ratio: 3450.5 / 9000, daysLeft: 23, perDay: 241 });
+  assert.equal(S.budgetStatus(S.setBudget(s, 1000), '2026-11-30').perDay, 0);
+  assert.equal(S.setBudget(s, 0).settings.budget, undefined);
+});
+
+test('restore from a backup adds back what is missing and keeps the rest', () => {
+  let backup = S.addTask(S.emptyState(), { text: 'เก่า' }, T(8));
+  backup = S.addMemo(backup, 'โน้ตเก่า', T(8));
+  backup = S.setNote(backup, '2026-11-01', 'บันทึกเก่า');
+  let now = S.addTask(S.emptyState(), { text: 'ใหม่' }, T(9));
+  now = S.setNote(now, '2026-11-01', 'บันทึกใหม่');
+  const { state, added } = S.restoreFrom(now, S.sanitize(JSON.parse(JSON.stringify(backup))));
+  assert.equal(added, 2);
+  assert.deepEqual(state.tasks.map((t) => t.text), ['ใหม่', 'เก่า']);
+  assert.deepEqual(state.memos.map((m) => m.text), ['โน้ตเก่า']);
+  assert.equal(state.notes['2026-11-01'], 'บันทึกใหม่');
+  assert.equal(S.restoreFrom(state, state).added, 0);
+});
