@@ -1193,6 +1193,8 @@ dialog.full[open] { animation: full-in .38s var(--ease); }
 .mark-chip .x { display: grid; place-items: center; width: 26px; height: 26px; border: 0; border-radius: 50%; background: none; color: var(--dim); font-size: 16px; line-height: 1; }
 .mark-chip.add { padding: 0 14px; background: var(--sunk); font-weight: 600; color: var(--ink); }
 .mark-chip svg, .pill-btn svg { width: 16px; height: 16px; }
+.answer .ts { display: inline-flex; align-items: center; height: 24px; margin-right: 6px; padding: 0 8px; border: 0; border-radius: 12px; background: var(--tint); color: var(--primary-text); font: 700 12.5px var(--font-num); font-variant-numeric: tabular-nums; vertical-align: 2px; }
+.rv-map-hint { margin: -4px 0 0; text-align: center; }
 .rv-textbar { flex: none; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .pill-btn { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 0 14px; border: 0; border-radius: 18px; background: var(--tint); color: var(--primary-text); font-weight: 700; }
 .pill-btn:disabled { opacity: .45; }

@@ -18,8 +18,9 @@ computer and writes in Thai; reply in Thai.
     `src/vendor/` holds pre-bundled third-party code; regenerate it as the app README says.
     Voice notes (`src/lib/voice.js`, IndexedDB) are transcribed by the device's own speech recognition
     (optionally the owner's Gemini/OpenAI key; Claude takes no audio). They are summarized on the device
-    with no AI (`src/lib/summarize.js`: TextRank/TextTiling + Thai meeting-note rules, tested against
-    `tests/fixtures/*.txt`) into mind maps (`src/lib/mindmap.js`, `src/mapview.js`); Claude is optional.
+    with no AI (`src/lib/summarize.js`: TextRank/TextTiling + Thai meeting-note rules, a template per
+    kind of recording, deletion-only node labels; tested against `tests/fixtures/*.txt`) into mind maps
+    (`src/lib/mindmap.js`, `src/mapview.js`; nodes may carry `at` ms to play from); Claude is optional.
     Recordings keep bookmarks (`marks`, ms) and word times (`times`, [char offset, ms]); when the state
     outgrows localStorage it moves to IndexedDB (`paewai-state`, flag key `paewai:v1:idb`).
     The font is Sarabun, shipped in `src/fonts/` (OFL).

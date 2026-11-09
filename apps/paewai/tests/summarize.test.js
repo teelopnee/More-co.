@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { childrenOf, rootOf } from '../src/lib/mindmap.js';
-import { analyze, clean, namedTopic, sentences, shorten, thaiNumber, toMindMap } from '../src/lib/summarize.js';
+import { childrenOf, rootOf, sanitizeMap } from '../src/lib/mindmap.js';
+import { analyze, clean, clockOf, label, namedTopic, sentences, shorten, thaiNumber, toMindMap } from '../src/lib/summarize.js';
 
 // The recordings were "made" on Monday 9 Nov 2026, 10:00.
 const NOW = new Date(2026, 10, 9, 10, 0).getTime();
@@ -24,7 +24,9 @@ function checkMap(map, a) {
     assert.doesNotMatch(n.text, /(?:^|\s)(?:เอ่อ|อืม)(?:\s|$)|ครับ$|ค่ะ$|นะคะ$|ผู้พูด|\(\d{2}:\d{2}\)/, n.text);
     const sibs = childrenOf(map, n.id).map((c) => c.text);
     assert.equal(new Set(sibs).size, sibs.length, `repeated under ${n.text}: ${sibs}`);
-    assert.ok(sibs.length <= 8, `too many under ${n.text}`);
+    assert.ok(sibs.length <= (n.parent == null ? 9 : 8), `too many under ${n.text}`);
+    // a few key words per node (Buzan), never a whole paragraph
+    if (n.parent != null) assert.ok(n.text.length <= 64, `long node: ${n.text}`);
   }
 }
 
@@ -170,4 +172,88 @@ test('edge cases: nothing, one line, English, a very long recording', () => {
   assert.ok(big.sentences > 800);
   assert.ok(ms < 8000, `${Math.round(ms)} ms`);
   checkMap(toMindMap(big, NOW), big);
+});
+
+test('the kind of recording picks the template (Notta/Otter style)', () => {
+  const kinds = Object.fromEntries(['meeting', 'lecture', 'memo', 'interview'].map((f) => [f, analyze(fixture(f), { now: NOW }).kind]));
+  assert.deepEqual(kinds, { meeting: 'meeting', lecture: 'lecture', memo: 'memo', interview: 'talk' });
+  const m = analyze(fixture('meeting'), { now: NOW });
+  assert.match(m.summary, /^\*\*สรุปสั้น:\*\* ประชุมเรื่องการเปิดตัวสินค้าใหม่ · 4 หัวข้อ: เลื่อนเปิดตัว, งบโฆษณาออนไลน์, /);
+  assert.match(m.gist, /ตกลง 2 เรื่อง · ต้องทำ 5 อย่าง · ยังค้าง 2 เรื่อง/);
+  // chapters: each topic a heading with its points, ✓ for what was agreed
+  assert.match(m.summary, /\n\*\*งบโฆษณาออนไลน์\*\*\n- เดิมตั้งไว้ 500,000 บาท\n/);
+  assert.match(m.summary, /\n- ✓ เพิ่มงบโฆษณาเป็น 600,000 บาท\n/);
+  assert.doesNotMatch(m.summary, /ทางการตลาดไม่มีปัญหา/, 'agreeing with "โอเคไหม" is not a point');
+  const s = analyze(fixture('samsung'), { now: NOW });
+  assert.match(s.gist, /^สนทนาเรื่องทริปเชียงใหม่ช่วงปีใหม่/);
+});
+
+test('lecture: definitions, pros and the homework', () => {
+  const a = analyze(fixture('lecture'), { now: NOW });
+  assert.deepEqual(
+    a.definitions.map((d) => d.term),
+    ['เงินสำรองฉุกเฉิน', 'การลงทุนแบบ DCA'],
+  );
+  assert.match(a.definitions[1].text, /^การซื้อกองทุนรวม/);
+  assert.deepEqual(
+    a.pros.map((p) => `${p.kind}: ${p.text}`),
+    ['ข้อดี: ไม่ต้องจับจังหวะตลาด', 'ข้อดี: ช่วยลดความเสี่ยงจากการซื้อตอนราคาสูง'],
+  );
+  assert.match(a.summary, /- เงินสำรองฉุกเฉิน คือ เงินที่เก็บไว้ใช้ตอนเกิดเหตุไม่คาดคิด/);
+  assert.match(a.summary, /\*\*งานและการบ้าน\*\*\n- การบ้าน: /);
+  const map = toMindMap(a, NOW);
+  const dca = map.nodes.find((n) => n.text === 'การลงทุนแบบ DCA');
+  const under = childrenOf(map, dca.id).map((n) => n.text);
+  assert.ok(under[0].startsWith('คือ การซื้อกองทุนรวม'), under.join(' | '));
+  const pros = map.nodes.find((n) => n.parent === dca.id && n.text === 'ข้อดี');
+  assert.deepEqual(childrenOf(map, pros.id).map((n) => n.text), ['ไม่ต้องจับจังหวะตลาด', 'ช่วยลดความเสี่ยงจากการซื้อตอนราคาสูง']);
+  // a node never loses its "ไม่ควร"
+  assert.ok(map.nodes.some((n) => n.text === 'ไม่ควรเอาไปลงทุนในสิ่งที่มีความเสี่ยงสูง'));
+});
+
+test('interview: questions and their answers', () => {
+  const a = analyze(fixture('interview'), { now: NOW });
+  assert.equal(a.kind, 'talk');
+  assert.equal(a.qa.length, 7);
+  assert.match(a.summary, /\*\*ถาม–ตอบ\*\*\n- คุณนิดเริ่มเปิดร้านตั้งแต่เมื่อไหร่\? → เปิดมาได้ 3 ปี/);
+  assert.match(a.summary, /ได้ผลไหม\? → ได้ผล/);
+  assert.match(a.summary, /\*\*ข้อแนะนำ\*\*\n- แนะนำให้เริ่มเล็ก ๆ ก่อน\n- อย่าเพิ่งลงทุนตกแต่งร้านเยอะ\n- ควรทำบัญชีรายรับรายจ่ายทุกวัน/);
+  const map = toMindMap(a, NOW);
+  const root = rootOf(map);
+  const qs = childrenOf(map, root.id).map((n) => n.text);
+  assert.equal(qs[0], 'คุณนิดเริ่มเปิดร้าน');
+  assert.ok(qs.includes('เมล็ดกาแฟใช้ของที่ไหน'));
+  const beans = map.nodes.find((n) => n.text === 'เมล็ดกาแฟใช้ของที่ไหน');
+  assert.deepEqual(childrenOf(map, beans.id).map((n) => n.text), ['ใช้เมล็ดจากดอยช้าง', 'ต้นทุนต่อแก้ว ~25 บาท']);
+  checkMap(map, a);
+});
+
+test('mind map: short labels, to-dos by person, times to play from', () => {
+  const text = fixture('meeting');
+  // word times as the recorder gives them: about one minute per paragraph
+  const times = [];
+  let at = 0;
+  text.split('\n').forEach((line, i) => {
+    times.push([at, i * 60_000]);
+    at += line.length + 1;
+  });
+  const a = analyze(text, { now: NOW, times });
+  assert.deepEqual(
+    a.sections.map((s) => clockOf(s.at)),
+    ['0:00', '1:00', '2:00', '3:00'],
+  );
+  assert.match(a.summary, /\n\*\*\[1:00\] งบโฆษณาออนไลน์\*\*\n/);
+  const map = toMindMap(a, NOW);
+  assert.equal(map.nodes.find((n) => n.text === 'บูธที่ห้าง').at, 180_000);
+  assert.equal(sanitizeMap(JSON.parse(JSON.stringify(map))).nodes.find((n) => n.text === 'บูธที่ห้าง').at, 180_000, 'times survive storage and sync');
+  const todo = map.nodes.find((n) => n.text === 'ต้องทำ');
+  const byPerson = childrenOf(map, todo.id);
+  assert.deepEqual(byPerson.slice(0, 2).map((n) => n.text), ['คุณบี', 'คุณเอ็ม']);
+  assert.deepEqual(childrenOf(map, byPerson[1].id).map((n) => n.text), ['ส่งสินค้าตัวอย่างให้อินฟลูเอนเซอร์ · พ. 2 ธ.ค.', 'ทำสัญญาเรื่องวันที่ลงคลิป']);
+  assert.ok(map.nodes.some((n) => n.text === 'ค่าโฆษณาแพงขึ้น ~20%'), 'the clause with the number');
+  // labels: deletion only, numbers keep their units, the parent's words are not repeated
+  assert.equal(label('ตอนนี้ทีมผลิตแจ้งมาว่าสินค้าล็อตแรกจะเสร็จช้ากว่ากำหนดประมาณ 2 สัปดาห์'), 'สินค้าล็อตแรกเสร็จช้ากว่ากำหนด ~2 สัปดาห์');
+  assert.equal(label('ตอนแรกขายแค่หน้าบ้าน ลงทุนไปประมาณ 80,000 บาท'), 'ตอนแรกขายแค่หน้าบ้าน ลงทุนไป ~80,000 บาท');
+  assert.equal(label('ตอนแรกขายแค่หน้าบ้าน ลงทุนไปประมาณ 80,000 บาท', 38), 'ตอนแรกขายแค่หน้าบ้าน ลงทุนไป', 'a number without its unit is left out, not cut');
+  assert.equal(label('มีเงินสำรองฉุกเฉินอย่างน้อย 6 เดือนของค่าใช้จ่ายรายเดือน', 42, 'เงินสำรองฉุกเฉิน'), 'มีอย่างน้อย 6 เดือนของค่าใช้จ่ายรายเดือน');
 });

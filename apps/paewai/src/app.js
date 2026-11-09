@@ -2918,7 +2918,7 @@ function renderRecView() {
       return `<li><label><input type="checkbox" data-i="${i}" checked><span class="kind-chip small k-${c.kind === 'task' && c.day ? 'remind' : c.kind}">${esc(KIND_NAMES[c.kind])}</span><span class="suggest-text">${esc(c.text)}${when ? ` <em>${esc(when)}</em>` : ''}</span></label></li>`;
     });
     sum.innerHTML =
-      `<div class="answer">${miniMarkdown(r.summary)}</div>` +
+      `<div class="answer">${withTimes(miniMarkdown(r.summary))}</div>` +
       (rows.length ? `<div class="suggest"><p class="suggest-title">สิ่งที่ต้องทำจากบันทึกนี้</p><ul>${rows.join('')}</ul><button type="button" class="primary" data-rv="add-items">แปะที่เลือก</button></div>` : '') +
       `<div class="sheet-buttons"><button type="button" class="secondary" data-rv="analyze-again">สรุปใหม่</button><button type="button" class="secondary" data-rv="copy-sum">คัดลอก</button><button type="button" class="secondary" data-rv="analyze">ให้ Claude สรุป</button></div>`;
   }
@@ -2935,6 +2935,7 @@ function renderRvMap() {
   const map = r && state.maps.find((m) => m.id === r.mapId);
   const host = $('#rv-map');
   host.classList.toggle('empty', !map);
+  $('#rv-map-hint').hidden = !map?.nodes.some((n) => Number.isFinite(n.at)) || !rvUrls.length;
   if (!map) {
     rvMapView?.destroy();
     rvMapView = null;
@@ -2943,7 +2944,17 @@ function renderRvMap() {
   }
   if (!rvMapView) {
     host.innerHTML = '';
-    rvMapView = new MapView(host, { editable: false });
+    rvMapView = new MapView(host, {
+      editable: false,
+      // a branch made from the recording knows when it was said: play from there
+      onSelect: (id) => {
+        const node = state.maps.find((m) => m.id === findRec(rvId)?.mapId)?.nodes.find((n) => n.id === id);
+        if (Number.isFinite(node?.at) && rvUrls.length) {
+          seekTo(node.at);
+          toast(`เล่นจาก ${V.clock(node.at)}`);
+        }
+      },
+    });
   }
   rvMapView.set(map, { fit: true });
   requestAnimationFrame(() => rvMapView?.fit(16));
@@ -3043,6 +3054,14 @@ player.addEventListener('ended', () => {
     player.play().catch(() => {});
   } else updatePlayer();
 });
+/** "[2:15]" in a summary (a topic's time) becomes a button that plays from there. */
+function withTimes(html) {
+  return html.replace(/\[(\d{1,2}(?::\d{2}){1,2})\]/g, (m, t) => {
+    const ms = t.split(':').reduce((a, x) => a * 60 + Number(x), 0) * 1000;
+    return `<button type="button" class="ts" data-seek="${ms}" aria-label="เล่นจาก ${t}">${t}</button>`;
+  });
+}
+
 /** Plays (or moves to) `ms` into the whole recording, across its files. */
 function seekTo(ms, play = true) {
   const r = findRec(rvId);
@@ -3252,7 +3271,7 @@ const AUTO_REC_TITLE = /^(?:บันทึกเสียง|ไฟล์เส
 /** Reads a recording's text on the device (lib/summarize.js): topics, decisions, tasks, open questions. */
 function analyzeLocal(r) {
   try {
-    return Sum.analyze(r.transcript, { title: r.title, now: r.at });
+    return Sum.analyze(r.transcript, { title: r.title, now: r.at, times: r.times });
   } catch (err) {
     console.error(err);
     return null;
@@ -3322,9 +3341,13 @@ function withMap(st, id) {
   let fresh = Sum.toMindMap(a, Date.now());
   const pins = markLines(r, 36);
   if (pins.length) {
-    let branch = Mm.addChild(fresh, Mm.rootOf(fresh).id, 'ช่วงที่ปักหมุด');
+    // bookmarks as a branch; each knows its time, so a tap plays from there
+    const branch = Mm.addChild(fresh, Mm.rootOf(fresh).id, 'ช่วงที่ปักหมุด');
     fresh = branch.map;
-    for (const l of pins.slice(0, 8)) fresh = Mm.addChild(fresh, branch.id, `📍 ${l}`).map;
+    pins.slice(0, 8).forEach((l, i) => {
+      const pin = Mm.addChild(fresh, branch.id, `📍 ${l}`);
+      fresh = { ...pin.map, nodes: pin.map.nodes.map((n) => (n.id === pin.id ? { ...n, at: r.marks[i] } : n)) };
+    });
   }
   const map = { ...fresh, id: old?.id ?? fresh.id, source: { kind: 'rec', id }, createdAt: old?.createdAt ?? fresh.createdAt };
   return S.editRec(S.saveMap(st, map), id, { mapId: map.id });
@@ -3338,6 +3361,12 @@ recview.addEventListener('click', async (e) => {
     return;
   }
   const r = findRec(rvId);
+  const seek = e.target.closest('[data-seek]')?.dataset.seek;
+  if (seek != null && r) {
+    if (rvUrls.length) seekTo(Number(seek));
+    else toast('ไฟล์เสียงไม่ได้อยู่ในเครื่องนี้');
+    return;
+  }
   const go = e.target.closest('[data-mark]')?.dataset.mark;
   if (go != null && r) {
     seekTo(r.marks[Number(go)] ?? 0);

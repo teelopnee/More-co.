@@ -1,4 +1,4 @@
-// Mind maps: a map is a flat list of nodes { id, parent, text, collapsed? } with one root
+// Mind maps: a map is a flat list of nodes { id, parent, text, collapsed?, at? } with one root
 // (parent null). Flat, so it syncs and merges like every other item and Claude can return it
 // with a simple JSON schema. Everything here is pure; app.js draws the result.
 
@@ -30,7 +30,13 @@ export function sanitizeMap(raw) {
     if (!n || typeof n.text !== 'string') continue;
     const id = typeof n.id === 'string' && n.id && !ids.has(n.id) ? n.id.slice(0, 64) : uid();
     ids.add(id);
-    nodes.push({ id, parent: typeof n.parent === 'string' && n.parent ? n.parent : null, text: clean(n.text) || '…', ...(n.collapsed ? { collapsed: true } : {}) });
+    nodes.push({
+      id,
+      parent: typeof n.parent === 'string' && n.parent ? n.parent : null,
+      text: clean(n.text) || '…',
+      ...(n.collapsed ? { collapsed: true } : {}),
+      ...(Number.isFinite(n.at) && n.at >= 0 ? { at: Math.round(n.at) } : {}), // ms into a recording
+    });
   }
   if (!nodes.length) return null;
   let root = nodes.find((n) => n.parent == null) ?? nodes[0];

@@ -13,8 +13,13 @@
 //      (Hearst 1997): a dip in word overlap between neighbouring windows is a topic change.
 //   5. Meeting-note rules: things to do (who, what, by when via lib/dates.js), decisions, open
 //      questions, numbers worth remembering; a short answer borrows the subject of its question.
-//   6. Mind map: the subject in the middle, a branch per topic named the way the speaker named
-//      it, the key sentences shortened under it (✓ for what was agreed), then ต้องทำ / ยังไม่สรุป.
+//   6. The kind of recording (meeting, lecture, interview, voice memo) picks the template, as
+//      Notta and Otter do: chapters with their times, decisions, action items, definitions,
+//      pros and cons, advice, questions and answers, and a one-line gist on top.
+//   7. Mind map: the subject in the middle, a branch per topic named the way the speaker named
+//      it, a few key words per node (Buzan; deletion-only compression), sub-topics for long
+//      topics (subsumption, Sanderson & Croft 1999), ✓ for what was agreed, then ต้องทำ by person
+//      and ยังไม่สรุป. Nodes keep the time they were said, so a tap can play from there.
 
 import { describeWhen, dayKey, parseWhen } from './dates.js';
 import { addChild, newMap, rootOf } from './mindmap.js';
@@ -44,7 +49,7 @@ const KEEP_END = wordSet('ตัว ใหม่ ออก ขึ้น ลง �
 /** Too general to be a key word on their own (fine inside a longer phrase). */
 const KEY_STOP = wordSet(`วัน คน ครั้ง เดือน ปี สัปดาห์ อาทิตย์ เวลา ชั่วโมง นาที บาท เปอร์เซ็นต์ ส่วน ที่ เครื่อง อัน ตัว ข้อ ทีม ละ
   เช้า สาย บ่าย เย็น ค่ำ คืน โมง พรุ่งนี้ มะรืน ปลาย ต้น กลาง หน้า หลัง ไว้ ทุกคน คุย ทาง ได้ เปิด ปิด เกิน
-  จอง ซื้อ จ่าย ใช้ เดิน ส่ง โทร หา ถาม เลื่อน สูง ต่ำ ใหญ่ เล็ก สะดวก คิด งาน สวัสดี ขอบคุณ สุดท้าย แรก การ ความ
+  จอง ซื้อ จ่าย ใช้ เดิน ส่ง โทร หา ถาม เลื่อน สูง ต่ำ ใหญ่ เล็ก สะดวก คิด งาน สวัสดี ขอบคุณ สุดท้าย แรก การ ความ ขาย เริ่ม
   จันทร์ อังคาร พุธ พฤหัส พฤหัสบดี ศุกร์ เสาร์ มกราคม กุมภาพันธ์ มีนาคม เมษายน พฤษภาคม มิถุนายน กรกฎาคม
   สิงหาคม กันยายน ตุลาคม พฤศจิกายน ธันวาคม`);
 /** Loanwords the word breaker splits into syllables ("อิน|ฟลู|เอน|เซอร์"): joined back. */
@@ -238,11 +243,11 @@ function compact(text) {
 }
 
 /** "ทีมผลิตแจ้งมาว่าสินค้าล็อตแรกเสร็จช้า…" → "สินค้าล็อตแรกเสร็จช้า…" when what was said stands on its own. */
-function dropFrame(text) {
+function dropFrame(text, loose = false) {
   const m = /^\S{0,24}?(?:แจ้งมาว่า|บอกมาว่า|บอกว่า|เล่าว่า|รายงานว่า|ยืนยันมาว่า|แจ้งว่า)\s*/.exec(text);
   if (!m) return text;
   const rest = text.slice(m[0].length);
-  return contentful(rest) >= 2 ? rest : text;
+  return contentful(rest) >= 2 || (loose && hasNumber(rest) && contentCount(rest) >= 2) ? rest : text;
 }
 
 // ---------------------------------------------------------------------------
@@ -267,13 +272,22 @@ const CLAUSE_WORDS = wordSet('และ หรือ โดย เช่น ก�
 /** A line → phrases (what lies between pauses) with their words: [{ p, toks }]. */
 function phrasesOf(line) {
   const out = [];
+  let cursor = 0;
   for (const chunk of line.split(/\s+/)) {
     if (!chunk) continue;
+    const at = line.indexOf(chunk, cursor);
+    cursor = at + chunk.length;
     const toks = words(chunk);
     const text = pauses(chunk, toks);
     const pieces = (text === chunk ? [chunk] : text.split(' ')).flatMap((x) => x.split(/(?<=[.!?…])/)).filter(Boolean);
-    if (pieces.length === 1) out.push({ p: chunk, toks });
-    else for (const p of pieces) out.push({ p, toks: words(p) });
+    if (pieces.length === 1) out.push({ p: chunk, toks, off: at });
+    else {
+      let inner = at;
+      for (const p of pieces) {
+        out.push({ p, toks: words(p), off: inner });
+        inner += p.length;
+      }
+    }
   }
   return out;
 }
@@ -311,11 +325,12 @@ function pauses(chunk, toks) {
  * Paragraph numbers mark breaks in the source (speaker turns, blank lines).
  */
 export function sentences(input) {
-  const lines = normalizeDigits(String(input ?? ''))
+  const norm = normalizeDigits(String(input ?? ''))
     .replace(/\r/g, '')
-    .replace(INLINE_SPEAKER, '\n')
-    .split('\n');
+    .replace(INLINE_SPEAKER, '\n');
+  const lines = norm.split('\n');
   const raw = [];
+  let lineStart = 0;
   let para = 0;
   let current = [];
   let count = 0;
@@ -324,6 +339,7 @@ export function sentences(input) {
   const flush = () => {
     let text = '';
     const toks = [];
+    const pos = current[0]?.pos ?? 0;
     for (const { p, toks: pt } of current) {
       if (text) {
         toks.push({ w: ' ', word: false, start: text.length, end: text.length + 1 });
@@ -335,23 +351,27 @@ export function sentences(input) {
     current = [];
     count = 0;
     if (text) {
-      raw.push({ text, toks, para, newPara: breakBefore });
+      raw.push({ text, toks, para, newPara: breakBefore, pos });
       breakBefore = false;
     }
   };
   for (const line0 of lines) {
+    const start = lineStart;
+    lineStart += line0.length + 1;
     if (SPEAKER_LINE.test(line0) || TIME_LINE.test(line0)) {
       flush();
       continue;
     }
     const line = line0.replace(SPEAKER_PREFIX, '').trim();
+    const lead = start + line0.indexOf(line);
     if (!line) {
       flush();
       para++;
       breakBefore = true;
       continue;
     }
-    for (const { p: phrase, toks: all } of phrasesOf(line)) {
+    for (const { p: phrase, toks: all, off } of phrasesOf(line)) {
+      const pos = lead + off;
       const toks = all.filter((t) => t.word);
       if (toks.length && toks.every((t) => FILLERS.has(t.w))) {
         if (count >= 4) flush(); // a pause
@@ -360,13 +380,15 @@ export function sentences(input) {
       if (toks.length && toks.every((t) => ACK.has(t.w) || PARTICLES.has(t.w))) {
         // "ได้ครับ" after a request: its own (empty) sentence, so the request stays clean
         flush();
-        current.push({ p: phrase, toks: all });
+        current.push({ p: phrase, toks: all, pos });
         flush();
         continue;
       }
-      const clause = count >= 6 && /^\S{2,30}?(?:จะต้อง|ต้อง|ช่วย|ควร)\S/.test(phrase) && !SOFT_STARTS.test(phrase);
+      const clause =
+        (count >= 6 && /^\S{2,30}?(?:จะต้อง|ต้อง|ช่วย|ควร)\S/.test(phrase) && !SOFT_STARTS.test(phrase)) ||
+        (count >= 3 && /^\S{2,30}?(?:คือ|หมายถึง|แปลว่า)\S/.test(phrase) && !/^(?:ก็)?คือ|^(?:ข้อดี|ข้อเสีย|หลักการ|ปัญหา|เรื่อง)/.test(phrase));
       if (current.length && (SENTENCE_STARTS.test(phrase) || (count >= 5 && SOFT_STARTS.test(phrase)) || clause)) flush();
-      current.push({ p: phrase, toks: all });
+      current.push({ p: phrase, toks: all, pos });
       count += toks.length;
       const last = toks.at(-1)?.w ?? '';
       if (END_PARTICLES.has(last) || /[.!?]$/.test(phrase) || QUESTION.test(phrase) || count >= 28) flush();
@@ -392,6 +414,7 @@ export function sentences(input) {
   const out = kept.map((s, i) => ({
     i,
     text: s.text,
+    pos: s.pos, // where it starts in the text (after numbers were normalized)
     para: s.para,
     newPara: s.newPara,
     clean: clean(s.text, s.toks),
@@ -409,7 +432,10 @@ export function sentences(input) {
       a.answers = i;
       q.answered = true;
     }
+    // "ทุกคนโอเคไหม" → "ไม่มีปัญหาค่ะ": agreeing says little
+    if (q.isQ && RHETORICAL.test(q.text)) a.agreeing = true;
   }
+  out.total = norm.length;
   return out;
 }
 
@@ -702,7 +728,8 @@ export function shorten(text, max = 40, { focus = [], keepStart = false } = {}) 
     let nb = b;
     for (let k = b; k > a && k >= b - 3 && b < idx.length - 1; k--) {
       if (natural(idx[k])) {
-        nb = k;
+        // only when that loses little
+        if (toks[idx[b]].end - toks[idx[k]].end <= max * 0.25) nb = k;
         break;
       }
     }
@@ -825,7 +852,7 @@ function openClause(s) {
   return shorten(dropFrame(compact(text)), 48);
 }
 
-const questionText = (s) => shorten(compact(s.clean.replace(/^แล้ว\s*/, '')), 48);
+const questionText = (s) => shorten(compact(s.clean.replace(/^แล้ว\s*/, '')), 48, { keepStart: true });
 
 /** Numbers worth remembering with the words that say what they are: "งบ… 600,000 บาท". */
 function factsOf(s, sents) {
@@ -859,7 +886,7 @@ function factsOf(s, sents) {
 }
 
 // ---------------------------------------------------------------------------
-// 6. Everything together
+// 6. Small helpers
 
 /** A number the summary already shows (in a point, a topic or a decision). */
 const saidElsewhere = (f, ...lists) => lists.flat().some((x) => x.text.includes(f.text) || x.text.replace(/\s+/g, '').includes(f.value));
@@ -872,23 +899,165 @@ function dedupe(list) {
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// 7. What kind of recording, and what is worth listing for it
+//
+// Summarizing apps (Notta, Otter) use a template per kind of recording: a meeting has decisions
+// and action items, a lecture has definitions and advice, an interview is questions and answers.
+
+/** "เงินสำรองฉุกเฉินคือเงินที่เก็บไว้…": a term and what it means. */
+const DEF_RE = /^(.{2,36}?)\s*(?:คือ|หมายถึง|แปลว่า)\s*(.{6,})$/;
+const DEF_SKIP = /^(?:หลักการ|ข้อดี|ข้อเสีย|ปัญหา|สรุป|เรื่อง|ประเด็น|สิ่งที่|อย่างที่|ที่|มัน|นี่|นั่น|อันนี้|เหตุผล|วิธี|คำถาม|คำตอบ|แผน|เป้าหมาย|ตอนนี้|วันนี้|ทาง|แบบ|ส่วน|อีก|ต่อไป|สุดท้าย|ก่อนอื่น|ข้อ|หัวข้อ|เดิม|ตอนแรก)/;
+/** "ข้อดีคือ…", "ข้อเสียคือ…": pros and cons. */
+const PROS_RE = /^(ข้อดี|ข้อเสีย|จุดเด่น|จุดด้อย|ประโยชน์|ข้อควรระวัง|ความเสี่ยง)(?:ของ\S{1,20})?\s*(?:คือ|ก็คือ|มี)?\s*(.{4,})$/;
+/** Advice: "ควร…", "ไม่ควร…", "แนะนำให้…", "อย่า…". */
+const ADVICE_RE = /(?:^|\s|ก็|ให้)(?:ควร|ไม่ควร|แนะนำ|อย่า(?!ง)|ห้าม)/;
+const LECTURE_RE = /(เรียน|บทเรียน|การบ้าน|นักเรียน|นักศึกษา|อาจารย์|สอบ|บรรยาย)/;
+
+function definitionOf(s, prev) {
+  if (s.isQ) return null;
+  // "เรื่องที่สามคือการลงทุนแบบ DCA" + "คือการซื้อกองทุนรวม…": what the topic just named means
+  if (/^(?:\S{0,6}\s)?(?:ก็)?คือ/.test(s.text.trim()) && prev) {
+    const term = namedTopic(prev.text);
+    if (term && term !== 'การบ้าน' && contentful(s.clean) >= 2) return { term, text: s.clean };
+  }
+  const m = DEF_RE.exec(s.clean);
+  if (!m || DEF_SKIP.test(m[1]) || PRONOUNS.has(m[1]) || contentful(m[1]) < 1 || contentCount(m[1]) > 4 || contentful(m[2]) < 2) return null;
+  return { term: m[1].trim(), text: m[2].trim() };
+}
+
 /**
- * Text → { title, named, keywords, points, decisions, actions, open, facts, sections, summary, items }.
- * `now` is when it was said (dates like "ศุกร์นี้" count from then).
+ * Where each sentence starts in the original text: found by a run of its Thai letters (numbers were
+ * rewritten, words were not), searching forward; in proportion when that fails.
  */
-export function analyze(text, { title = '', now = Date.now(), maxPoints } = {}) {
+function originOffsets(sents, text) {
+  const out = [];
+  let cursor = 0;
+  for (const s of sents) {
+    const guess = Math.round((s.pos * text.length) / Math.max(1, sents.total));
+    const m = /[\u0E01-\u0E4E]{6,}/.exec(s.text);
+    let at = -1;
+    if (m) {
+      const k = text.indexOf(m[0].slice(0, 14), cursor);
+      if (k >= 0 && Math.abs(k - guess) < 4000) at = Math.max(cursor, k - m.index);
+    }
+    if (at < 0) at = Math.max(cursor, guess);
+    out.push(at);
+    cursor = at;
+  }
+  return out;
+}
+
+/** Recording ms where the text at `offset` was said, from the transcript's word times (or -1). */
+function timeOfSentence(offset, times) {
+  if (!times?.length) return -1;
+  let ms = times[0][1];
+  for (const [c, t] of times) {
+    if (c > offset) break;
+    ms = t;
+  }
+  return ms;
+}
+
+export const clockOf = (ms) => {
+  const t = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(t / 3600);
+  const m = Math.floor((t % 3600) / 60);
+  const sec = String(t % 60).padStart(2, '0');
+  return h ? `${h}:${String(m).padStart(2, '0')}:${sec}` : `${m}:${sec}`;
+};
+
+// Mind map labels: a few key words, not a sentence (Buzan: one key word per line; Mapify keeps
+// branches to short phrases). Deletion only: nothing is said that was not said.
+const SQUEEZE = wordSet('ตอนนี้ ก็ นะ หน่อย ค่อนข้าง จริงๆ แค่นั้น');
+const SQUEEZE_END = /\s*(?:เลย|เอง|ด้วย|แล้ว|กัน|ไว้)$/;
+
+function squeeze(text) {
+  const toks = words(text);
+  let out = '';
+  for (const t of toks) {
+    if (t.word && SQUEEZE.has(t.w)) continue;
+    out += text.slice(t.start, t.end);
+  }
+  out = out.replace(/\s*ประมาณ\s*(?=\d)/g, ' ~').replace(/(^|\s)ตอนนี้\s*/g, '$1').replace(/\s+/g, ' ').trim();
+  for (let k = 0; k < 2; k++) out = out.replace(SQUEEZE_END, '');
+  return out || text;
+}
+
+/**
+ * A short label for a mind map node: from the start of what was said (so a "ไม่ควร" is never cut
+ * off), and without the words its parent node already says.
+ */
+export function label(text, max = 42, parent = '') {
+  let t = squeeze(dropFrame(compact(text), true)).replace(/\s*ๆ/g, 'ๆ');
+  if (parent && parent.length >= 3 && t.includes(parent)) {
+    const rest = t.replace(parent, '').replace(/\s+/g, ' ').trim();
+    if (contentful(rest) >= 2) t = stripLead(rest, COMPACT_LEAD);
+  }
+  if (t.length <= max) return t;
+  // Too long: the run of pauses (what lies between spaces) that says the most, numbers first
+  const parts = t.split(' ').filter(Boolean);
+  let best = null;
+  for (let a = 0; a < parts.length; a++) {
+    let len = -1;
+    for (let b = a; b < parts.length; b++) {
+      len += parts[b].length + 1;
+      if (len > max) break;
+      // never "80,000" without its "บาท"
+      if (/^[~]?\d[\d,.]*$/.test(parts[b]) && parts[b + 1] && UNIT_RE.test(parts[b + 1])) continue;
+      const piece = parts.slice(a, b + 1).join(' ');
+      const first = wordsOf(piece)[0]?.w ?? '';
+      const v = contentCount(piece) + (hasNumber(piece) ? 4 : 0) + (a === 0 ? 1 : 0) - (WEAK_START.has(first) || first.length <= 1 ? 3 : 0);
+      if (!best || v > best.v) best = { v, piece };
+    }
+  }
+  return best && contentful(best.piece) >= 2 ? best.piece : shorten(t, max, { keepStart: true });
+}
+
+/** The words before "ไป / เป็น / ที่ …" or a number: "เลื่อนเปิดตัวไป 15 ธ.ค." → "เลื่อนเปิดตัว". */
+const HEAD_STOP = wordSet('ไป เป็น ที่ ให้ จาก ช่วง ใน กับ ของ แต่ และ หรือ วันที่ ถึง เพราะ โดย');
+function headPhrase(text, max = 22) {
+  const toks = words(text);
+  let end = 0;
+  for (const t of toks) {
+    if (t.word && (HEAD_STOP.has(t.w) || /^\d/.test(t.w))) break;
+    end = t.end;
+  }
+  const head = text.slice(0, end).trim();
+  return contentCount(head) >= 1 && head.length <= max ? head : '';
+}
+
+const KIND_NAMES = { meeting: 'ประชุม', lecture: 'บรรยาย', talk: 'สนทนา', memo: 'โน้ตเสียง', note: 'บันทึก' };
+/** Speaker labels of a transcript ("ผู้พูด 1", "Speaker 2"): how many people talk. */
+const speakersIn = (text) => new Set([...String(text ?? '').matchAll(/(?:ผู้พูด|speaker)\s*(\d+)/gi)].map((m) => m[1])).size;
+
+/**
+ * Text → { kind, title, named, gist, keywords, points, decisions, actions, open, facts, definitions,
+ * pros, advice, qa, sections, summary, items }.
+ * `now` is when it was said (dates like "ศุกร์นี้" count from then); `times` ([[character, ms]])
+ * puts the time of each topic in the summary and on the mind map.
+ */
+export function analyze(text, { title = '', now = Date.now(), maxPoints, times = null } = {}) {
   const today = dayKey(new Date(now));
   const sents = sentences(text);
   if (!sents.length) return null;
   const phrases = keyphrases(sents);
   const scores = scoreSentences(sents, phrases);
+  sents.forEach((s, i) => {
+    if (s.agreeing) scores[i] *= 0.4;
+  });
   const focus = phrases.slice(0, 6).map((p) => p.phrase);
+  const offsets = times?.length ? originOffsets(sents, String(text ?? '')) : [];
+  const at = (i) => (i == null || offsets[i] == null ? -1 : timeOfSentence(offsets[i], times));
 
-  // Rules: things to do, what was agreed, what is still open, numbers
+  // Rules: things to do, what was agreed, what is still open, numbers, meanings, advice
   const actions = [];
   const decisions = [];
   const open = [];
   const facts = [];
+  const definitions = [];
+  const pros = [];
+  const advice = [];
   const used = new Set();
   sents.forEach((s, i) => {
     if (used.has(i)) return;
@@ -936,25 +1105,55 @@ export function analyze(text, { title = '', now = Date.now(), maxPoints } = {}) 
       const text = shorten(compact(t), 48, { focus });
       if (!decisions.some((d) => d.text === text)) decisions.push({ i, text });
       used.add(i);
+      return;
     }
+    const pro = PROS_RE.exec(s.clean);
+    const lastPro = pros.at(-1);
+    if (pro) pros.push({ i, kind: pro[1], text: shorten(compact(pro[2]), 48, { keepStart: true }) });
+    else if (lastPro && lastPro.i === i - 1 && /^(?:และ|แล้วก็|อีกข้อ|นอกจากนี้)/.test(s.text)) pros.push({ i, kind: lastPro.kind, text: shorten(compact(s.clean), 48, { keepStart: true }) });
+    const def = !pro && definitionOf(s, sents[i - 1]);
+    if (def && !definitions.some((d) => d.term === def.term)) definitions.push({ i, term: shorten(def.term, 28, { keepStart: true }), text: shorten(compact(def.text), 56, { keepStart: true }) });
+    if (ADVICE_RE.test(` ${s.clean}`) && !SPECULATIVE.test(s.clean.slice(0, 4))) advice.push({ i });
   });
+  // advice: the best dozen, in the order they were said (worded only once chosen)
+  advice.splice(0, advice.length, ...advice.sort((x, y) => scores[y.i] - scores[x.i]).slice(0, 12).sort((x, y) => x.i - y.i));
+  for (const x of advice) x.text = shorten(squeeze(compact(sents[x.i].clean)), 56, { focus });
   open.sort((a, b) => a.i - b.i);
   // numbers: only the best few dozen sentences that have one are worth reading closely
   const withNumbers = sents.filter((s) => NUMBER.test(s.clean)).sort((a, b) => MONEY.test(b.clean) - MONEY.test(a.clean) || scores[b.i] - scores[a.i]).slice(0, 40);
   for (const s of withNumbers) for (const f of factsOf(s, sents)) if (!facts.some((x) => x.value === f.value)) facts.push(f);
   facts.sort((a, b) => b.money - a.money || scores[b.i] - scores[a.i]);
 
+  // Questions and the answers right after them (an interview, a class, a call)
+  const qa = [];
+  for (const s of sents) {
+    if (s.answers == null || qa.length >= 40) continue;
+    const q = sents[s.answers];
+    if (q.content.length < 1 || RHETORICAL.test(q.text)) continue;
+    // the answer goes on in the same turn
+    const more = [];
+    for (let j = s.i + 1; j < sents.length && j <= s.i + 2 && sents[j].para === s.para && !sents[j].isQ; j++) if (sents[j].content.length >= 2) more.push(sents[j]);
+    qa.push({ i: q.i, ai: [s.i, ...more.map((x) => x.i)], q: questionText(q), a: shorten(squeeze(dropFrame(compact(s.clean))), 64, { keepStart: true }), more: more.map((x) => shorten(squeeze(compact(x.clean)), 48, { keepStart: true })) });
+  }
+
   // Key sentences, not repeating the lists above
-  const isPoint = (i) => {
-    const s = sents[i];
+  const pointable = sents.map((s) => {
     const weight = s.content.length + (hasNumber(s.text) ? 1 : 0);
+    if (!(weight >= 3 || (s.answers != null && weight >= 1)) || GREETING.test(s.clean) || s.isQ) return false;
     // "วันนี้มาคุยเรื่อง…" names the subject; in a short note it is the content
-    const agenda = sents.length >= 6 && AGENDA.test(s.clean);
-    return !used.has(i) && (weight >= 3 || (s.answers != null && weight >= 1)) && !GREETING.test(s.clean) && !s.isQ && !agenda;
-  };
+    if (sents.length >= 6 && AGENDA.test(s.clean)) return false;
+    if (s.agreeing && !hasNumber(s.text)) return false;
+    // "เรื่องต่อไปคืองบโฆษณาออนไลน์": names a topic, says nothing more
+    if (TOPIC_MARKERS.test(s.clean)) {
+      const n = namedTopic(s.text);
+      if (n && contentCount(s.clean.replace(n, '')) < 3) return false;
+    }
+    return true;
+  });
+  const isPoint = (i) => !used.has(i) && pointable[i];
   const count = maxPoints ?? Math.max(2, Math.min(7, Math.round(sents.length * 0.2)));
   const cands = sents.map((s) => s.i).filter(isPoint);
-  const points = pick(cands, scores, count, sents).map((i) => ({ i, text: pointText(sents[i], sents, 64, focus) }));
+  const points = pick(cands, scores, count, sents).map((i) => ({ i, text: pointText(sents[i], sents, 64, focus), at: at(i) }));
 
   // The subject
   let subject = '';
@@ -965,49 +1164,138 @@ export function analyze(text, { title = '', now = Date.now(), maxPoints } = {}) 
   if (!subject && given && !AUTO_TITLE.test(given)) subject = given;
   if (!subject) subject = phrases.find((p) => p.n > 1 && p.count >= 2)?.phrase ?? (given || 'บันทึก');
 
+  // What kind of recording it is
+  const all = sents.map((s) => s.clean).join(' ');
+  const lectureScore = definitions.length * 2 + pros.length + Math.min(advice.length, 4) + (LECTURE_RE.test(all) ? 2 : 0);
+  const meetingScore = decisions.length * 2 + actions.filter((a) => a.who).length * 2 + (/ประชุม/.test(all) ? 2 : 0) + open.length;
+  const kind =
+    sents.length <= 8 && actions.length >= Math.max(2, sents.length / 3)
+      ? 'memo'
+      : qa.length >= 4 && qa.length * 3 >= sents.length * 0.6 && decisions.length < 2
+        ? 'talk'
+        : lectureScore > meetingScore && lectureScore >= 3
+          ? 'lecture'
+          : meetingScore >= 3
+            ? 'meeting'
+            : 'note';
+
   // Topics and what each one says
   const usedNames = new Set([subject]);
   const sections = [];
-  for (const [a, b] of topics(sents)) {
+  // 7 ± 2 main branches on the map (Buzan): long recordings get one more topic, not more
+  const maxSections = sents.length >= 150 ? 7 : 6;
+  for (const [a, b] of topics(sents, { maxSections })) {
     const part = sents.slice(a, b);
     let name = '';
     for (const s of part.slice(0, 2)) if ((name = namedTopic(s.text))) break;
-    if (!name || name === subject) name = a === 0 && part.length >= 2 ? 'ภาพรวม' : '';
+    const decs = decisions.filter((d) => d.i >= a && d.i < b).sort((x, y) => scores[y.i] - scores[x.i]).slice(0, 3);
+    if (!name || name === subject) {
+      // the opening part: named after what was decided in it, else "ภาพรวม"
+      const fromDecision = decs.length ? headPhrase(decs[0].text) : '';
+      name = fromDecision && !usedNames.has(fromDecision) ? fromDecision : a === 0 && part.length >= 2 ? 'ภาพรวม' : '';
+    }
     if (!name || usedNames.has(name)) {
       const local = keyphrases(part, { max: 8 });
       name = local.map((p) => p.phrase).find((p) => !usedNames.has(p) && !subject.includes(p) && p.length >= 3) ?? '';
     }
+    const special = new Set([...definitions, ...pros].map((x) => x.i));
     const idx = [];
-    for (let i = a; i < b; i++) if (isPoint(i) && !(name && sents[i].clean.includes(name) && sents[i].content.length <= wordsOf(name).length + 2)) idx.push(i);
-    const decs = decisions.filter((d) => d.i >= a && d.i < b).sort((x, y) => scores[y.i] - scores[x.i]).slice(0, 3);
+    for (let i = a; i < b; i++) if (isPoint(i) && !special.has(i) && !(name && sents[i].clean.includes(name) && sents[i].content.length <= wordsOf(name).length + 2)) idx.push(i);
     // the best sentences of the topic that do not repeat each other or what was agreed
     const top = [];
+    const room = b - a > 30 ? 5 : b - a > 7 ? 4 : 3;
     for (const i of idx.sort((x, y) => scores[y] - scores[x])) {
-      if (top.length >= (b - a > 7 ? 4 : 3)) break;
+      if (top.length >= room) break;
       if ([...top, ...decs.map((d) => d.i)].some((j) => jaccard(sents[i].set, sents[j].set) >= 0.34 || sents[j].clean === sents[i].clean)) continue;
       top.push(i);
     }
-    if (!top.length && !decs.length) continue;
-    if (!name) name = shorten(compact(sents[top[0] ?? decs[0].i].clean), 22);
+    const defs = definitions.filter((d) => d.i >= a && d.i < b);
+    const prs = pros.filter((p) => p.i >= a && p.i < b);
+    if (!top.length && !decs.length && !defs.length) continue;
+    if (!name) name = shorten(compact(sents[top[0] ?? decs[0]?.i ?? defs[0].i].clean), 22);
     usedNames.add(name);
-    const rows = [...top.map((i) => ({ i, text: pointText(sents[i], sents, 56, [name, ...focus]) })), ...decs.map((d) => ({ i: d.i, text: d.text, agreed: true }))].sort((x, y) => x.i - y.i);
-    sections.push({ name, from: a, to: b, rows, points: rows.filter((r) => !r.agreed).map((r) => r.text), decisions: decs.map((d) => d.text) });
+    const rows = [
+      ...top.map((i) => ({ i, text: pointText(sents[i], sents, 56, [name, ...focus]), at: at(i) })),
+      ...decs.map((d) => ({ i: d.i, text: d.text, agreed: true, at: at(d.i) })),
+    ].sort((x, y) => x.i - y.i);
+    // a long topic: its own key phrases become sub-topics (general above specific, Sanderson & Croft)
+    const subtopics = [];
+    if (b - a >= 12) {
+      const taken = new Set([...top, ...decs.map((d) => d.i)]);
+      for (const p of keyphrases(part, { max: 10 })) {
+        if (subtopics.length >= 3) break;
+        if (p.count < 3 || p.phrase.length < 3 || name.includes(p.phrase) || subject.includes(p.phrase) || p.phrase.includes(name)) continue;
+        if (subtopics.some((t) => t.name.includes(p.phrase) || p.phrase.includes(t.name))) continue;
+        const best = idx.filter((i) => sents[i].text.includes(p.phrase) && !taken.has(i)).sort((x, y) => scores[y] - scores[x]).slice(0, 2);
+        if (!best.length) continue;
+        best.forEach((i) => taken.add(i));
+        subtopics.push({ name: p.phrase, at: at(best[0]), rows: best.map((i) => ({ i, text: pointText(sents[i], sents, 56, [p.phrase]), at: at(i) })) });
+      }
+    }
+    sections.push({
+      name,
+      from: a,
+      to: b,
+      at: at(a),
+      rows,
+      subtopics,
+      definitions: defs,
+      pros: prs,
+      points: rows.filter((r) => !r.agreed).map((r) => r.text),
+      decisions: decs.map((d) => d.text),
+    });
   }
   if (sections.length === 1 && sections[0].name === 'ภาพรวม') sections[0].name = phrases.find((p) => !subject.includes(p.phrase))?.phrase ?? 'ภาพรวม';
 
   const keywords = phrases
     .map((p) => p.phrase)
-    .filter((p, _, all) => !subject.includes(p) && !all.some((q) => q !== p && q.includes(p) && !subject.includes(q)))
+    .filter((p, _, list) => !subject.includes(p) && !list.some((q) => q !== p && q.includes(p) && !subject.includes(q)))
     .slice(0, 8);
+
+  // One line to read first (templated, like a cover note): what it was and what came out of it
+  const names = sections.length > 1 && kind !== 'talk' ? sections.map((x) => x.name) : [];
+  const listed = names.length > 4 ? `${names.slice(0, 4).join(', ')} และอีก ${names.length - 4} หัวข้อ` : names.join(', ');
+  const counts = [
+    decisions.length ? `ตกลง ${decisions.length} เรื่อง` : '',
+    actions.length ? `${kind === 'lecture' ? 'งาน/การบ้าน' : 'ต้องทำ'} ${actions.length} อย่าง` : '',
+    open.length ? `ยังค้าง ${open.length} เรื่อง` : '',
+    kind === 'talk' && qa.length ? `ถาม–ตอบ ${qa.length} ข้อ` : '',
+    kind === 'lecture' && definitions.length ? `นิยาม ${definitions.length} คำ` : '',
+  ].filter(Boolean);
+  // several people talking, and it was not a meeting: a conversation
+  const kindName = kind === 'note' && speakersIn(text) >= 2 ? 'สนทนา' : KIND_NAMES[kind];
+  const gist = [
+    `${kindName}${subject !== 'บันทึก' && !AUTO_TITLE.test(subject) && (kind !== 'memo' || named) ? `เรื่อง${subject}` : ''}`,
+    names.length ? `${names.length} หัวข้อ: ${listed}` : '',
+    ...counts,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+
+  // The summary, laid out for the kind of recording (Otter's outline, Notta's chapters)
+  const ts = (ms) => (ms >= 0 ? `[${clockOf(ms)}] ` : '');
   const doText = (x) => `${x.who ? `${x.who}: ` : ''}${x.text}${x.when ? ` (${x.when})` : ''}`;
-  const lines = [];
+  const lines = [`**สรุปสั้น:** ${gist}`];
   const block = (head, items) => {
     if (items.length) lines.push(`**${head}**`, ...items.map((x) => `- ${x}`));
   };
-  if (sections.length > 1) block('หัวข้อที่คุย', sections.filter((s) => s.points.length).map((s) => `**${s.name}:** ${s.points.slice(0, 3).join(' · ')}`));
-  else block('ใจความสำคัญ', points.map((p) => p.text));
-  block('ข้อสรุป', dedupe(decisions.map((d) => d.text)).slice(0, 6));
-  block('ต้องทำ', actions.slice(0, 10).map(doText));
+  const qaLine = (x) => `${ts(at(x.i))}${x.q}? → ${x.a}`;
+  if (kind === 'talk') block('ถาม–ตอบ', qa.slice(0, 12).map(qaLine));
+  else if (sections.length > 1) {
+    // chapters: each topic with its time, its points, what was agreed (✓)
+    for (const x of sections) {
+      const rows = [...x.definitions.slice(0, 1).map((d) => ({ i: d.i, text: `${d.term} คือ ${d.text}` })), ...x.rows];
+      if (!rows.length) continue;
+      lines.push(`**${ts(x.at)}${x.name}**`, ...rows.slice(0, 5).map((r) => `- ${r.agreed ? '✓ ' : ''}${r.text}`));
+    }
+  } else block('ใจความสำคัญ', points.map((p) => p.text));
+  if (sections.length <= 1 || kind === 'talk') block('ข้อสรุป', dedupe(decisions.map((d) => d.text)).slice(0, 6));
+  if (kind === 'lecture' || (kind !== 'meeting' && definitions.length)) {
+    const shown = sections.length > 1 ? new Set(sections.map((x) => x.definitions[0]?.i)) : new Set();
+    block('นิยาม', definitions.filter((d) => !shown.has(d.i)).slice(0, 6).map((d) => `**${d.term}** คือ ${d.text}`));
+  }
+  if (pros.length) block('ข้อดีและข้อควรระวัง', pros.slice(0, 6).map((p) => `${p.kind}: ${p.text}`));
+  block(kind === 'lecture' ? 'งานและการบ้าน' : 'ต้องทำ', actions.slice(0, 10).map(doText));
   block(
     'ยังไม่สรุป',
     dedupe(open.map((o) => o.text))
@@ -1017,7 +1305,13 @@ export function analyze(text, { title = '', now = Date.now(), maxPoints } = {}) 
         return note ? `${t} (${note})` : t;
       }),
   );
-  const notSaid = facts.filter((f) => !saidElsewhere(f, sections.length > 1 ? sections.flatMap((x) => x.rows) : points, decisions, actions));
+  if (kind === 'lecture' && qa.length) block('ถาม–ตอบ', qa.slice(0, 5).map(qaLine));
+  if (kind === 'lecture' || kind === 'talk') {
+    const already = new Set([...(kind === 'talk' ? [] : sections.flatMap((x) => x.rows.map((r) => r.i)))]);
+    block('ข้อแนะนำ', dedupe(advice.filter((x) => !already.has(x.i)).map((x) => x.text)).slice(0, 6));
+  }
+  const shownRows = kind === 'talk' ? qa.map((x) => ({ text: `${x.a} ${x.more.join(' ')}` })) : sections.length > 1 ? sections.flatMap((x) => x.rows) : points;
+  const notSaid = facts.filter((f) => !saidElsewhere(f, shownRows, decisions, actions));
   const shownFacts = sections.length > 1 && notSaid.filter((f) => f.money).length >= 2 ? notSaid.filter((f) => f.money) : notSaid;
   if (shownFacts.length) lines.push(`**ตัวเลขสำคัญ:** ${dedupe(shownFacts.map((f) => f.text)).slice(0, 5).join(' · ')}`);
   if (keywords.length) lines.push(`**คำสำคัญ:** ${keywords.join(' · ')}`);
@@ -1026,40 +1320,111 @@ export function analyze(text, { title = '', now = Date.now(), maxPoints } = {}) 
     kind: 'task',
     text: `${x.day ? `${x.day.slice(8)}/${x.day.slice(5, 7)}${x.time ? ` ${x.time}` : ''} ` : ''}${x.text}${x.who ? ` (${x.who})` : ''}`,
   }));
-  return { title: subject, named, keywords, points, decisions, actions, open, facts, sections, summary: lines.join('\n'), items, sentences: sents.length };
+  for (const x of actions) x.at = at(x.i);
+  for (const x of decisions) x.at = at(x.i);
+  for (const x of open) x.at = at(x.i);
+  for (const x of qa) x.at = at(x.i);
+  return {
+    kind,
+    title: subject,
+    named,
+    gist,
+    keywords,
+    points,
+    decisions,
+    actions,
+    open,
+    facts,
+    definitions,
+    pros,
+    advice,
+    qa,
+    sections,
+    summary: lines.join('\n'),
+    items,
+    sentences: sents.length,
+  };
 }
 
-/** The analysis as a mind map: subject in the middle, topics around it, then what to do and what is open. */
+/**
+ * The analysis as a mind map, the way mind-mapping apps lay one out: the subject in the middle,
+ * a branch per topic, a few key words per node (✓ for what was agreed), sub-topics for long
+ * topics, what to do grouped by person, what is still open. Nodes carry the time they were said
+ * (`at`), so the app can play from there.
+ */
 export function toMindMap(a, now = Date.now()) {
   let map = newMap(a.title, now);
   const root = rootOf(map).id;
-  const add = (parent, text) => {
+  const add = (parent, text, at = -1) => {
     const r = addChild(map, parent, text);
     map = r.map;
+    if (at >= 0) map = { ...map, nodes: map.nodes.map((n) => (n.id === r.id ? { ...n, at } : n)) };
     return r.id;
   };
   const branch = (name, list, max = 6) => {
-    const items = dedupe(list).slice(0, max);
-    if (!items.length) return;
-    const id = add(root, name);
-    for (const x of items) add(id, x);
+    const seen = new Set();
+    const items = list.filter((x) => x.text && !seen.has(x.text) && seen.add(x.text)).slice(0, max);
+    if (!items.length) return null;
+    const id = add(root, name, items[0].at ?? -1);
+    for (const x of items) add(id, x.text, x.at ?? -1);
+    return id;
   };
-  const multi = a.sections.length > 1;
-  if (multi) {
+
+  if (a.kind === 'talk' && a.qa.length >= 3) {
+    // an interview: each question a branch, its answer under it
+    for (const x of a.qa.slice(0, 8)) {
+      const id = add(root, label(x.q, 32), x.at ?? -1);
+      add(id, label(x.a, 42), x.at ?? -1);
+      for (const m of x.more.slice(0, 1)) add(id, label(m, 42));
+    }
+  } else if (a.sections.length > 1) {
     for (const s of a.sections) {
-      const id = add(root, s.name);
-      for (const r of s.rows) add(id, r.agreed ? `✓ ${r.text}` : r.text);
+      const id = add(root, s.name, s.at);
+      const def = s.definitions[0];
+      if (def) add(id, `คือ ${shorten(def.text.replace(/\s*ๆ/g, 'ๆ'), 46, { keepStart: true })}`, -1);
+      const seen = new Set();
+      let room = 8 - (def ? 1 : 0);
+      const fresh = (text) => text && !seen.has(text) && (seen.add(text), true);
+      for (const r of s.rows) {
+        const text = r.agreed ? `✓ ${label(r.text, 40, s.name)}` : label(r.text, 42, s.name);
+        if (room > 0 && fresh(text)) {
+          add(id, text, r.at);
+          room--;
+        }
+      }
+      for (const kind of [...new Set(s.pros.map((p) => p.kind))]) {
+        if (room-- <= 0) break;
+        const sub = add(id, kind);
+        for (const p of s.pros.filter((x) => x.kind === kind).slice(0, 3)) add(sub, label(p.text, 42));
+      }
+      for (const t of s.subtopics) {
+        const kids = t.rows.map((r) => ({ text: label(r.text, 36, t.name), at: r.at })).filter((k) => fresh(k.text));
+        if (!kids.length || room-- <= 0) continue;
+        const sub = add(id, t.name, t.at);
+        for (const k of kids) add(sub, k.text, k.at);
+      }
     }
   } else {
-    for (const p of dedupe(a.points.map((x) => shorten(x.text, 52))).slice(0, 5)) add(root, p);
-    branch('ข้อสรุป', a.decisions.map((d) => `✓ ${d.text}`));
+    for (const p of dedupe(a.points.map((x) => label(x.text, 40))).slice(0, 5)) add(root, p, a.points.find((x) => label(x.text, 40) === p)?.at ?? -1);
+    branch('ข้อสรุป', a.decisions.map((d) => ({ text: `✓ ${label(d.text, 32)}`, at: d.at })));
+    branch('นิยาม', a.definitions.map((d) => ({ text: `${d.term}: ${label(d.text, 28)}`, at: -1 })));
   }
-  branch(
-    'ต้องทำ',
-    a.actions.map((x) => `${x.who ? `${x.who}: ` : ''}${shorten(x.text, 44, { keepStart: true })}${x.when ? ` · ${x.when}` : ''}`),
-    8,
-  );
-  branch('ยังไม่สรุป', a.open.map((o) => o.text));
-  if (!multi) branch('ตัวเลขสำคัญ', a.facts.filter((f) => !saidElsewhere(f, a.points, a.decisions, a.actions)).map((f) => f.text), 5);
+
+  // what to do: by person when several people got something
+  const people = [...new Set(a.actions.map((x) => x.who).filter(Boolean))];
+  const todo = (x, withWho) => ({ text: `${withWho && x.who ? `${x.who}: ` : ''}${shorten(squeeze(x.text), 34, { keepStart: true })}${x.when ? ` · ${x.when}` : ''}`, at: x.at });
+  if (people.length >= 2 && a.actions.length >= 3) {
+    const id = add(root, a.kind === 'lecture' ? 'งานและการบ้าน' : 'ต้องทำ');
+    for (const who of people) {
+      const sub = add(id, who);
+      for (const x of a.actions.filter((y) => y.who === who).slice(0, 4)) add(sub, todo(x, false).text, x.at);
+    }
+    for (const x of a.actions.filter((y) => !y.who).slice(0, 4)) add(id, todo(x, false).text, x.at);
+  } else branch(a.kind === 'lecture' ? 'งานและการบ้าน' : 'ต้องทำ', a.actions.map((x) => todo(x, true)), 8);
+  branch('ยังไม่สรุป', a.open.map((o) => ({ text: label(o.text, 36), at: o.at })));
+  const answered = new Set(a.qa.flatMap((x) => x.ai));
+  if (a.kind === 'talk' || (a.kind === 'lecture' && a.sections.length <= 1))
+    branch('ข้อแนะนำ', a.advice.filter((x) => a.kind !== 'talk' || !answered.has(x.i)).map((x) => ({ text: label(x.text, 36), at: -1 })), 4);
+  if (a.sections.length <= 1 && a.kind !== 'talk') branch('ตัวเลขสำคัญ', a.facts.filter((f) => !saidElsewhere(f, a.points, a.decisions, a.actions)).map((f) => ({ text: f.text, at: -1 })), 5);
   return { ...map, source: null, createdAt: now, updatedAt: now };
 }
