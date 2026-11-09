@@ -1284,3 +1284,20 @@ dialog.full[open] { animation: full-in .38s var(--ease); }
 .rec-live-partial { color: var(--dim); }
 .stt-device { display: grid; gap: 8px; margin-top: 8px; }
 .stt-device p { margin: 0; }
+
+/* ---------- Claude by copy and paste ---------- */
+.claude-ask { display: grid; gap: 12px; }
+.claude-job { margin: 0 4px; padding: 12px 16px; border-radius: 16px; background: var(--tint); color: var(--primary-text); font-size: 15px; font-weight: 600; }
+.cp-step { display: grid; gap: 10px; padding: 16px 18px; border-radius: 20px; background: var(--sunk); transition: box-shadow .3s var(--ease); }
+.cp-step > p { margin: 0; }
+.cp-step textarea { background: var(--card) !important; }
+.cp-step .sheet-buttons > .secondary { background: var(--card); }
+.cp-step .sheet-buttons > .primary { flex: 2 1 220px; white-space: nowrap; }
+.cp-head { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 16px; }
+.cp-n { display: inline-grid; place-items: center; flex: none; width: 26px; height: 26px; border-radius: 50%; background: #d97757; color: #fff; font-size: 14px; font-weight: 700; }
+.cp-step.waiting { box-shadow: 0 0 0 2px #d97757; }
+.cp-step.waiting .cp-n { animation: pulse .8s var(--ease) 4 alternate; }
+.cp-preview > summary { min-height: 40px; display: flex; align-items: center; gap: 6px; color: var(--primary-text); font-size: 15px; font-weight: 600; cursor: pointer; list-style: none; }
+.cp-preview > summary::-webkit-details-marker { display: none; }
+.cp-preview pre { max-height: 34vh; margin: 4px 0 0; padding: 12px 14px; overflow: auto; border-radius: 14px; background: var(--card); font: inherit; font-size: 13.5px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
+.suggest .all { justify-self: start; }

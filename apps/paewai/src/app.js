@@ -632,7 +632,16 @@ input.addEventListener('keydown', (e) => {
 
 // Several lines pasted at once = several things, each sorted on its own.
 input.addEventListener('paste', (e) => {
-  const lines = pastedLines(e.clipboardData?.getData('text/plain') ?? '');
+  const text = e.clipboardData?.getData('text/plain') ?? '';
+  if (C.isAnswer(text)) {
+    // an answer copied from Claude: read it in the Claude sheet (its job, if one is waiting)
+    e.preventDefault();
+    const p = C.readPasted(text);
+    const job = claudeJob.kind !== 'ask' && (p.summary || p.outline) ? claudeJob : { kind: 'ask' };
+    openClaude('', { job, pasted: text });
+    return;
+  }
+  const lines = pastedLines(text);
   if (lines.length < 2) return;
   e.preventDefault();
   let next = state;
@@ -1674,8 +1683,17 @@ async function shareFile(name, text, type) {
 // Toast
 
 let toastTimer = null;
+/** Over an open sheet the rest of the page is inert: the toast (and its undo) goes into the top sheet. */
+function placeToast(el = $('#toast')) {
+  const host = document.activeElement?.closest?.('dialog[open]') ?? [...document.querySelectorAll('dialog[open]:not(.popover)')].at(-1) ?? document.body;
+  if (el.parentElement !== host) host.append(el);
+}
+// a sheet closing under a toast hands it on ('close' does not bubble, so listen while capturing)
+document.addEventListener('close', (e) => e.target.contains?.($('#toast')) && placeToast(), true);
+
 function toast(message, action) {
   const el = $('#toast');
+  placeToast(el);
   el.innerHTML = `<span>${esc(message)}</span>${action ? `<button type="button">${esc(action.label)}</button>` : ''}`;
   if (action) $('button', el).addEventListener('click', () => {
     action.run();
@@ -2090,12 +2108,18 @@ document.addEventListener('visibilitychange', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Ask Claude (lib/claude.js): in the app with the person's API key, or in the Claude app
+// Ask Claude (lib/claude.js). The usual way needs no key: the app writes the whole prompt, the person
+// pastes it into Claude (app or claude.ai), copies the answer and pastes it back into step 2, where
+// readPasted() picks out what to file. With the person's own API key there is also "ถามในแอป".
+// One sheet, three jobs: a question ('ask'), a recording to summarise ('rec'), a mind map to grow ('map').
 
 const claudeDialog = $('#claude-dialog');
 let claudeCfg = loadClaudeCfg(); // { key, model } on this device only
 let claudeItems = [];
 let asking = null;
+const JOB_KEY = 'paewai:claude-job'; // survives the page being reloaded while the person is in Claude
+let claudeJob = loadJob();
+let claudeSent = ''; // the prompt last copied, so it is not mistaken for the answer
 
 function loadClaudeCfg() {
   try {
@@ -2112,10 +2136,42 @@ function saveClaudeCfg() {
   } catch {
     // storage blocked
   }
+  renderClaude();
 }
 
-function openClaude(question = '', { settings = false } = {}) {
+function loadJob() {
+  try {
+    const j = JSON.parse(sessionStorage.getItem(JOB_KEY) ?? 'null');
+    return j && ['rec', 'map'].includes(j.kind) && typeof j.id === 'string' ? j : { kind: 'ask' };
+  } catch {
+    return { kind: 'ask' };
+  }
+}
+
+function setJob(job) {
+  const same = job.kind === claudeJob.kind && job.id === claudeJob.id;
+  claudeJob = job;
+  try {
+    if (job.kind === 'ask') sessionStorage.removeItem(JOB_KEY);
+    else sessionStorage.setItem(JOB_KEY, JSON.stringify(job));
+  } catch {
+    // storage blocked
+  }
+  return same;
+}
+
+/**
+ * Opens the sheet. `question` fills the question box; `job` says what is being sent (a question
+ * by default); `settings` opens the settings at the bottom (transcription, optional API key).
+ */
+function openClaude(question = '', { settings = false, job = { kind: 'ask' }, pasted = '' } = {}) {
+  const same = setJob(job);
   if (question) $('#claude-q').value = question;
+  if (!same || question || pasted) {
+    $('#claude-paste').value = pasted;
+    $('#claude-out').hidden = true;
+    $('#claude-out').innerHTML = '';
+  }
   $('#claude-key').value = claudeCfg.key ?? '';
   $('#claude-model').value = C.MODELS.includes(claudeCfg.model) ? claudeCfg.model : C.DEFAULT_MODEL;
   $('#stt-provider').value = sttProvider();
@@ -2124,10 +2180,172 @@ function openClaude(question = '', { settings = false } = {}) {
   android?.sttRefresh?.();
   renderSttSettings();
   $('#claude-settings').open = settings;
+  $('#claude-preview').open = false;
+  $('#claude-step2').classList.remove('waiting');
+  renderClaude();
   if (!claudeDialog.open) claudeDialog.showModal();
   if (settings) requestAnimationFrame(() => $('#claude-settings').scrollIntoView({ block: 'start', behavior: 'smooth' }));
-  if (question && claudeCfg.key) askClaude();
+  if (pasted) readClaudePaste();
+  else if (question && claudeCfg.key && job.kind === 'ask') askClaude();
 }
+
+const nf = (n) => n.toLocaleString('th-TH');
+
+/** What this job sends to Claude ('' when there is nothing to send). */
+function claudePrompt() {
+  if (claudeJob.kind === 'rec') {
+    const r = findRec(claudeJob.id);
+    if (!r?.transcript?.trim()) return '';
+    const at = new Date(r.at);
+    return C.noteWebPrompt(C.timedText(r.transcript, r.times), 'การถอดเสียง', {
+      title: r.title,
+      when: `${longDate(dayKey(at))} เวลา ${timeOf(at)} น.`,
+      timed: !!r.times?.length,
+      pins: markLines(r),
+    });
+  }
+  if (claudeJob.kind === 'map') {
+    const map = state.maps.find((m) => m.id === claudeJob.id);
+    return map ? C.mapWebPrompt(C.mapOutline(map)) : '';
+  }
+  const question = $('#claude-q').value.trim();
+  return question ? C.webPrompt(question, $('#claude-context').checked ? C.contextFor(state, today) : '', { today: longDate(today) }) : '';
+}
+
+/** Big prompts may be more than one chat takes (Thai is about one token per character or two). */
+const LONG_PROMPT = 150_000;
+
+function renderClaude() {
+  const kind = claudeJob.kind;
+  const rec = kind === 'rec' ? findRec(claudeJob.id) : null;
+  const map = kind === 'map' ? state.maps.find((m) => m.id === claudeJob.id) : null;
+  $('#claude-title').lastChild.textContent = kind === 'rec' ? 'สรุปบันทึกด้วย Claude' : kind === 'map' ? 'ขยายมายด์แมปด้วย Claude' : 'ถาม Claude';
+  $('#claude-ask').hidden = kind !== 'ask';
+  const job = $('#claude-job');
+  job.hidden = kind === 'ask';
+  if (rec) job.textContent = `ส่งข้อความที่ถอดจาก “${rec.title}” (${nf(rec.transcript?.length ?? 0)} ตัวอักษร) ให้ Claude สรุป ทำมายด์แมป และหาสิ่งที่ต้องทำ`;
+  if (map) job.textContent = `ส่งโครงร่างของ “${Mm.titleOf(map)}” (${map.nodes.length} กิ่ง) ให้ Claude เติมกิ่งย่อยและจัดให้เป็นระเบียบ`;
+  $('#claude-step2-hint').textContent =
+    kind === 'rec'
+      ? 'ใน Claude กดปุ่มคัดลอกใต้คำตอบ แล้วกลับมาวางตรงนี้ แอปจะใส่ชื่อเรื่อง สรุป มายด์แมป และสิ่งที่ต้องทำลงบันทึกนี้ให้'
+      : kind === 'map'
+        ? 'ใน Claude กดปุ่มคัดลอกใต้คำตอบ (หรือที่กล่องโค้ด) แล้วกลับมาวางตรงนี้ แอปจะเปลี่ยนมายด์แมปตามโครงร่างใหม่ (เลิกทำได้)'
+        : 'ใน Claude กดปุ่มคัดลอกใต้คำตอบ แล้วกลับมาวางตรงนี้ แอปจะแยกสิ่งที่ควรแปะให้เลือก';
+  $('[data-claude="ask"]').hidden = !claudeCfg.key;
+  $('[data-claude="ask"] span').textContent = kind === 'ask' ? 'ถามในแอป (API)' : 'ให้ Claude ทำในแอป (API)';
+  const prompt = claudePrompt();
+  $('#claude-size').textContent = prompt ? `· ${nf(prompt.length)} ตัวอักษร` : '';
+  const long = $('#claude-long');
+  long.hidden = prompt.length <= LONG_PROMPT;
+  if (!long.hidden) long.textContent = 'ข้อความยาวมาก ถ้า Claude บอกว่ายาวเกินที่รับได้ ให้ใช้ “สรุปในเครื่อง” แทน หรือแบ่งส่งทีละช่วง';
+  if ($('#claude-preview').open) showPrompt(prompt);
+}
+
+/** The prompt as it will be sent (only the start of a very long one: the page stays light). */
+function showPrompt(prompt = claudePrompt()) {
+  const max = 20_000;
+  $('#claude-prompt').textContent = prompt
+    ? prompt.length > max ? `${prompt.slice(0, max)}\n\n… (อีก ${nf(prompt.length - max)} ตัวอักษร คัดลอกไปครบทั้งหมด)` : prompt
+    : 'พิมพ์คำถาม หรือแตะคำถามสำเร็จรูปก่อน';
+}
+
+/** Step 1: copies the prompt (and opens Claude). Synchronous up to the link, so pop-up blockers allow it. */
+function sendToClaude(open) {
+  const prompt = claudePrompt();
+  if (!prompt) {
+    if (claudeJob.kind === 'ask') {
+      toast('พิมพ์คำถาม หรือแตะคำถามสำเร็จรูปก่อน');
+      $('#claude-q').focus();
+    } else toast(claudeJob.kind === 'rec' ? 'ถอดเสียงก่อน แล้วค่อยส่งให้ Claude' : 'ไม่เจอมายด์แมปนี้แล้ว');
+    return;
+  }
+  const copied = copyText(prompt, null);
+  claudeSent = prompt;
+  if (open) {
+    const a = Object.assign(document.createElement('a'), { href: C.CLAUDE_WEB, target: '_blank', rel: 'noopener' });
+    document.body.append(a);
+    a.click();
+    a.remove();
+  }
+  $('#claude-step2').classList.add('waiting');
+  copied.then((ok) => {
+    if (ok) toast(open ? 'คัดลอกแล้ว วางในแชตของ Claude แล้วกดส่ง ได้คำตอบแล้วคัดลอกกลับมาวางที่ข้อ 2' : 'คัดลอกแล้ว ไปวางในแชตใหม่ของ Claude แล้วกดส่ง');
+    else {
+      $('#claude-preview').open = true;
+      showPrompt(prompt);
+      toast('คัดลอกไม่ได้ กดค้างที่ข้อความด้านล่างเพื่อเลือกทั้งหมดแล้วคัดลอก');
+    }
+  });
+}
+
+/** Step 2: reads what was pasted and does what the job is for. */
+function readClaudePaste() {
+  const text = $('#claude-paste').value.trim();
+  if (!text) {
+    toast('วางคำตอบจาก Claude ก่อน');
+    $('#claude-paste').focus();
+    return;
+  }
+  if (claudeSent && text === claudeSent.trim()) {
+    toast('นี่คือคำถามที่คัดลอกไป ส่งใน Claude ก่อน แล้วคัดลอกคำตอบกลับมา');
+    return;
+  }
+  $('#claude-step2').classList.remove('waiting');
+  const p = C.readPasted(text);
+  if (claudeJob.kind === 'rec') applyRecAnswer(claudeJob.id, p);
+  else if (claudeJob.kind === 'map') applyMapAnswer(claudeJob.id, p);
+  else {
+    // no แปะไว้ block: offer the answer's list lines, unticked
+    const items = p.items.length ? p.items : listLines(p.reply).map((it) => ({ ...it, off: true }));
+    showAnswer({ reply: p.reply || text, items, note: p.items.length || !items.length ? '' : 'คำตอบนี้ไม่มีกล่อง “แปะไว้” เลือกบรรทัดที่อยากแปะเองได้' });
+  }
+}
+
+/** The bulleted or numbered lines of an answer, as things that could be filed. */
+function listLines(text) {
+  return String(text ?? '')
+    .split('\n')
+    .filter((l) => /^\s*(?:[-*•]|\d{1,2}[.)])\s+\S/.test(l))
+    .map((l) => ({ kind: null, text: pastedLines(l)[0] ?? '' }))
+    .filter((it) => it.text && it.text.length <= 200)
+    .slice(0, 15);
+}
+
+/** Pastes from the clipboard (the Android app reads it itself; browsers ask first). */
+async function pasteFromClipboard({ quiet = false } = {}) {
+  let text = '';
+  try {
+    text = android?.readClipboard ? android.readClipboard() : await navigator.clipboard.readText();
+  } catch {
+    text = '';
+  }
+  text = String(text ?? '').trim();
+  if (!text || (claudeSent && text === claudeSent.trim())) {
+    if (!quiet) toast(text ? 'ในคลิปบอร์ดยังเป็นคำถามอยู่ คัดลอกคำตอบจาก Claude ก่อน' : 'วางเองได้: กดค้างในช่องแล้วเลือกวาง');
+    return false;
+  }
+  if (quiet) {
+    // coming back from Claude: only take what is clearly an answer
+    const p = C.readPasted(text);
+    if (!C.isAnswer(text) && !p.items.length && !p.outline && !p.summary) return false;
+  }
+  $('#claude-paste').value = text;
+  readClaudePaste();
+  return true;
+}
+
+// Back from Claude: point at step 2, and on Android take the answer straight from the clipboard.
+let backCheck = 0;
+function backFromClaude() {
+  if (!claudeDialog.open || !$('#claude-step2').classList.contains('waiting') || $('#claude-paste').value.trim()) return;
+  clearTimeout(backCheck);
+  backCheck = setTimeout(async () => {
+    $('#claude-step2').scrollIntoView({ block: 'center', behavior: 'smooth' });
+    if (android?.readClipboard && (await pasteFromClipboard({ quiet: true }))) toast('วางคำตอบจาก Claude ให้แล้ว');
+  }, 250);
+}
+document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && backFromClaude());
+window.addEventListener('focus', backFromClaude);
 
 /** Bold, bullets and paragraphs from Claude's text, safely. */
 function miniMarkdown(text) {
@@ -2144,7 +2362,7 @@ function miniMarkdown(text) {
     if (bullet) list.push(inline(bullet[1]));
     else {
       flush();
-      if (line) blocks.push(`<p>${inline(line.replace(/^#+\s*/, ''))}</p>`);
+      if (line && !/^(`{3,}|~{3,})/.test(line)) blocks.push(`<p>${inline(line.replace(/^#+\s*/, ''))}</p>`);
     }
   }
   flush();
@@ -2162,16 +2380,26 @@ function claudeError(err, Anthropic) {
   return err?.message || 'ถาม Claude ไม่สำเร็จ';
 }
 
+/** "ถามในแอป": only with the person's own API key (optional). */
 async function askClaude() {
+  if (claudeJob.kind === 'rec') {
+    const id = claudeJob.id;
+    claudeDialog.close();
+    analyzeRec(id);
+    return;
+  }
+  if (claudeJob.kind === 'map') {
+    claudeDialog.close();
+    expandMapApi(claudeJob.id);
+    return;
+  }
   const question = $('#claude-q').value.trim();
   if (!question) {
     toast('พิมพ์คำถาม หรือแตะคำถามสำเร็จรูปก่อน');
     return;
   }
   if (!claudeCfg.key) {
-    $('#claude-settings').open = true;
-    $('#claude-key').focus();
-    toast('ใส่ API key ก่อน หรือใช้ “เปิดใน Claude” แทน');
+    sendToClaude(true);
     return;
   }
   if (asking) return;
@@ -2201,18 +2429,21 @@ function showAnswer({ reply, items, note: why }) {
   claudeItems = items;
   const now = Date.now();
   const rows = items.map((it, i) => {
-    const r = classify(it.text, now, { force: it.kind });
+    const r = classify(it.text, now, { force: it.kind || null });
     const when = r.kind === 'task' && r.day ? describeWhen(r.day, r.time, today) : r.kind === 'money' && r.amount ? baht(r.amount) : '';
     const tone = r.kind === 'task' && r.day ? 'remind' : r.kind;
-    return `<li><label><input type="checkbox" data-i="${i}" checked><span class="kind-chip small k-${tone}">${esc(KIND_NAMES[r.kind])}</span><span class="suggest-text">${esc(r.kind === 'shop' && r.items.length > 1 ? r.items.map((x) => x.text).join(' · ') : r.text)}${when ? ` <em>${esc(when)}</em>` : ''}</span></label></li>`;
+    return `<li><label><input type="checkbox" data-i="${i}"${it.off ? '' : ' checked'}><span class="kind-chip small k-${tone}">${esc(KIND_NAMES[r.kind])}</span><span class="suggest-text">${esc(r.kind === 'shop' && r.items.length > 1 ? r.items.map((x) => x.text).join(' · ') : r.text)}${when ? ` <em>${esc(when)}</em>` : ''}</span></label></li>`;
   });
-  $('#claude-out').innerHTML =
-    `<div class="answer">${miniMarkdown(reply)}</div>` +
+  const out = $('#claude-out');
+  out.hidden = false;
+  out.innerHTML =
+    (reply ? `<div class="answer">${miniMarkdown(reply)}</div>` : '') +
     (why ? `<p class="dim small">${esc(why)}</p>` : '') +
     (items.length
       ? `<div class="suggest"><p class="suggest-title">แปะลงแอปได้เลย</p><ul>${rows.join('')}</ul><button type="button" class="primary" data-claude="add">แปะที่เลือก</button></div>`
       : '') +
-    `<button type="button" class="text-btn" data-claude="copy">คัดลอกคำตอบ</button>`;
+    (reply ? `<button type="button" class="text-btn" data-claude="copy">คัดลอกคำตอบ</button>` : '');
+  requestAnimationFrame(() => out.scrollIntoView({ block: 'start', behavior: 'smooth' }));
 }
 
 const KIND_NAMES = { task: 'งาน', note: 'โน้ต', shop: 'ซื้อ', money: 'จ่าย' };
@@ -2224,7 +2455,7 @@ function addClaudeItems() {
   for (const box of $$('#claude-out input[data-i]:checked')) {
     const it = claudeItems[Number(box.dataset.i)];
     if (!it) continue;
-    const r = classify(it.text, now, { force: it.kind });
+    const r = classify(it.text, now, { force: it.kind || null });
     if (r.kind === 'money' && !r.amount) continue;
     next = route(next, r, now + n);
     n++;
@@ -2234,35 +2465,33 @@ function addClaudeItems() {
     return;
   }
   claudeDialog.close();
+  $('#claude-paste').value = '';
   commit(next, { undoable: true, animate: true });
   toast(`แปะ ${n} เรื่องจาก Claude แล้ว`, { label: 'เลิกทำ', run: undo });
-}
-
-function openInClaudeApp() {
-  const question = $('#claude-q').value.trim() || C.PRESETS.plan;
-  const prompt = C.webPrompt(question, $('#claude-context').checked ? C.contextFor(state, today) : '');
-  const link = C.webLink(prompt);
-  copyText(prompt, null);
-  const a = Object.assign(document.createElement('a'), { href: link, target: '_blank', rel: 'noopener' });
-  document.body.append(a);
-  a.click();
-  a.remove();
-  toast(link === C.CLAUDE_WEB ? 'คัดลอกคำถามแล้ว วางในแชตของ Claude ได้เลย' : 'เปิด Claude แล้ว ได้คำตอบแล้วคัดลอกมาวางในช่องแปะ จะจัดให้ทีละบรรทัด');
 }
 
 claudeDialog.addEventListener('click', (e) => {
   const preset = e.target.closest('[data-ask]')?.dataset.ask;
   if (preset) {
     $('#claude-q').value = C.PRESETS[preset];
+    renderClaude();
     if (claudeCfg.key) askClaude();
     return;
   }
   const act = e.target.closest('[data-claude]')?.dataset.claude;
   if (act === 'ask') askClaude();
-  if (act === 'open') openInClaudeApp();
+  if (act === 'open') sendToClaude(true);
+  if (act === 'copy-prompt') sendToClaude(false);
+  if (act === 'clip') pasteFromClipboard();
+  if (act === 'read') readClaudePaste();
   if (act === 'add') addClaudeItems();
   if (act === 'copy') copyText($('#claude-out .answer')?.innerText ?? '');
 });
+$('#claude-preview').addEventListener('toggle', (e) => e.target.open && showPrompt());
+$('#claude-q').addEventListener('input', () => renderClaude());
+$('#claude-context').addEventListener('change', () => renderClaude());
+// a pasted answer is read straight away
+$('#claude-paste').addEventListener('paste', () => setTimeout(readClaudePaste, 0));
 $('#claude-key').addEventListener('change', (e) => {
   claudeCfg = { ...claudeCfg, key: e.target.value.trim() };
   saveClaudeCfg();
@@ -2274,7 +2503,8 @@ $('#claude-model').addEventListener('change', (e) => {
 $('#claude-q').addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
     e.preventDefault();
-    askClaude();
+    if (claudeCfg.key) askClaude();
+    else sendToClaude(true);
   }
 });
 claudeDialog.addEventListener('close', () => asking?.abort());
@@ -3210,8 +3440,7 @@ async function analyzeRec(id) {
     return;
   }
   if (!claudeCfg.key) {
-    openClaude('', { settings: true });
-    toast('ใส่ Claude API key ก่อน หรือแตะ “เปิดใน Claude” แล้วนำคำตอบกลับมาวาง');
+    openClaude('', { job: { kind: 'rec', id } });
     return;
   }
   busy.set(id, { kind: 'claude' });
@@ -3256,14 +3485,75 @@ async function claudeFinal(request) {
   }
 }
 
-function openClaudeWeb(prompt, done) {
-  const link = C.webLink(prompt);
-  copyText(prompt, null);
-  const a = Object.assign(document.createElement('a'), { href: link, target: '_blank', rel: 'noopener' });
-  document.body.append(a);
-  a.click();
-  a.remove();
-  toast(done ?? (link === C.CLAUDE_WEB ? 'คัดลอกคำถามแล้ว วางในแชตของ Claude ได้เลย' : 'เปิด Claude แล้ว (คัดลอกคำถามไว้ให้ด้วย)'));
+/** A copied-and-pasted answer about a recording: title, summary, mind map and things to do. */
+function applyRecAnswer(id, p) {
+  const cur = findRec(id);
+  if (!cur) return;
+  // no headings at all: the whole answer is the summary
+  const summary = p.summary || (!p.outline && !p.items.length ? p.reply : '');
+  if (!summary && !p.outline && !p.items.length) {
+    toast('อ่านคำตอบนี้ไม่ได้ ลองคัดลอกด้วยปุ่มคัดลอกใต้คำตอบของ Claude');
+    return;
+  }
+  let next = state;
+  let mapId = cur.mapId;
+  if (p.outline) {
+    const old = state.maps.find((m) => m.id === mapId);
+    const fresh = C.timesFromLabels(Mm.fromOutline(p.outline, p.title || cur.title));
+    const map = { ...fresh, id: old?.id ?? fresh.id, source: { kind: 'rec', id }, createdAt: old?.createdAt ?? Date.now(), updatedAt: Date.now() };
+    next = S.saveMap(next, map);
+    mapId = map.id;
+  }
+  // a title the person did not write (the default, or the one the on-device summary gave) can change
+  const autoTitle = p.title && (AUTO_REC_TITLE.test(cur.title) || cur.title === analyzeLocal(cur)?.title);
+  next = S.editRec(next, id, { ...(summary ? { summary } : {}), mapId, ...(autoTitle ? { title: p.title } : {}) });
+  pendingItems.set(id, p.items);
+  if (rvId === id) rvItems = p.items;
+  claudeDialog.close();
+  $('#claude-paste').value = '';
+  setJob({ kind: 'ask' });
+  commit(next, { undoable: true });
+  if (rvId === id && recview.open) rvTab(summary || p.items.length ? 'sum' : 'map');
+  toast('ใส่คำตอบจาก Claude แล้ว', { label: 'เลิกทำ', run: undo });
+}
+
+/** Fresh branches keep the time of an old branch with the same words. */
+function keepTimes(nodes, old) {
+  const at = new Map(old.filter((n) => Number.isFinite(n.at)).map((n) => [n.text, n.at]));
+  return nodes.map((n) => (!Number.isFinite(n.at) && at.has(n.text) ? { ...n, at: at.get(n.text) } : n));
+}
+
+/** Replaces a mind map's branches with an outline (from Claude or typed), undoably. */
+function replaceMap(id, outline, done) {
+  const map = state.maps.find((m) => m.id === id);
+  if (!map) return false;
+  const fresh = C.timesFromLabels(Mm.fromOutline(outline, Mm.titleOf(map)));
+  if (fresh.nodes.length < 2) {
+    toast('ไม่เจอโครงร่างในข้อความนี้ (ต้องมี # หัวข้อ และ - กิ่ง)');
+    return false;
+  }
+  const next = { ...map, nodes: keepTimes(fresh.nodes, map.nodes), updatedAt: Date.now() };
+  commit(S.saveMap(state, next), { undoable: true });
+  if (mapId === id) mapView?.set(next, { fit: true });
+  const back = () => {
+    undo();
+    const was = state.maps.find((m) => m.id === id);
+    if (mapId === id && was) mapView?.set(was, { fit: true });
+  };
+  toast(done, { label: 'เลิกทำ', run: back });
+  return true;
+}
+
+function applyMapAnswer(id, p) {
+  const outline = p.outline || $('#claude-paste').value;
+  if (Mm.fromOutline(outline).nodes.length < 2) {
+    toast('ไม่เจอโครงร่างในคำตอบนี้ ลองคัดลอกจากกล่องโค้ดของ Claude');
+    return;
+  }
+  claudeDialog.close();
+  $('#claude-paste').value = '';
+  setJob({ kind: 'ask' });
+  replaceMap(id, outline, 'ขยายมายด์แมปแล้ว');
 }
 
 const AUTO_REC_TITLE = /^(?:บันทึกเสียง|ไฟล์เสียงที่แชร์มา|ข้อความที่แชร์มา)\s/;
@@ -3425,7 +3715,7 @@ recview.addEventListener('click', async (e) => {
       toast('ถอดเสียงก่อน แล้วค่อยส่งให้ Claude');
       return;
     }
-    openClaudeWeb(C.noteWebPrompt(r.transcript, 'การถอดเสียง'), 'เปิด Claude แล้ว ได้โครงร่างกลับมาให้วางในมายด์แมป (⋮ → วางโครงร่าง)');
+    openClaude('', { job: { kind: 'rec', id: r.id } });
   }
   if (act === 'copy-sum') copyText(r.summary);
   if (act === 'add-items') {
@@ -3644,23 +3934,7 @@ $('#mm-menu').addEventListener('click', async (e) => {
     $('#paste-form').outline.value = '';
     $('#paste-dialog').showModal();
   }
-  if (act === 'claude') {
-    if (!claudeCfg.key) {
-      openClaudeWeb(C.noteWebPrompt(Mm.toOutline(map), 'มายด์แมป'), 'เปิด Claude แล้ว ได้โครงร่างกลับมาให้ ⋮ → วางโครงร่าง');
-      return;
-    }
-    toast('Claude กำลังขยายความ…');
-    try {
-      const note = C.readNote(await claudeFinal(C.noteRequest({ model: claudeCfg.model, kind: 'มายด์แมป', text: Mm.toOutline(map), today: longDate(today) })));
-      if (!note.map) throw new Error(note.note || 'Claude ไม่ได้ส่งมายด์แมปกลับมา');
-      const next = { ...map, nodes: note.map.nodes, updatedAt: Date.now() };
-      commit(S.saveMap(state, next), { undoable: true });
-      mapView.set(next, { fit: true });
-      toast('ขยายความแล้ว', { label: 'เลิกทำ', run: () => (undo(), mapView.set(state.maps.find((m) => m.id === map.id), { fit: true })) });
-    } catch (err) {
-      toast(err?.message || 'ไม่สำเร็จ');
-    }
-  }
+  if (act === 'claude') openClaude('', { job: { kind: 'map', id: map.id } });
   if (act === 'delete') {
     mapDialog.close();
     commit(S.deleteMap(state, map.id), { undoable: true });
@@ -3668,15 +3942,25 @@ $('#mm-menu').addEventListener('click', async (e) => {
   }
 });
 
+/** "ให้ Claude ขยายความ" in the app, with the person's own API key (optional). */
+async function expandMapApi(id) {
+  const map = state.maps.find((m) => m.id === id);
+  if (!map) return;
+  toast('Claude กำลังขยายความ…');
+  try {
+    const note = C.readNote(await claudeFinal(C.noteRequest({ model: claudeCfg.model, kind: 'มายด์แมป', text: Mm.toOutline(map), today: longDate(today) })));
+    if (!note.map) throw new Error(note.note || 'Claude ไม่ได้ส่งมายด์แมปกลับมา');
+    replaceMap(id, Mm.toOutline(note.map), 'ขยายความแล้ว');
+  } catch (err) {
+    toast(err?.message || 'ไม่สำเร็จ');
+  }
+}
+
 $('#paste-form').addEventListener('submit', () => {
   const text = $('#paste-form').outline.value;
-  const map = state.maps.find((m) => m.id === mapId);
-  if (!map || !text.trim()) return;
-  const fresh = Mm.fromOutline(text, Mm.titleOf(map));
-  const next = { ...map, nodes: fresh.nodes, updatedAt: Date.now() };
-  commit(S.saveMap(state, next), { undoable: true });
-  mapView.set(next, { fit: true });
-  toast('ใช้โครงร่างนี้แล้ว', { label: 'เลิกทำ', run: () => (undo(), mapView.set(state.maps.find((m) => m.id === map.id), { fit: true })) });
+  if (!mapId || !text.trim()) return;
+  // a whole answer from Claude works too: its outline is picked out
+  replaceMap(mapId, C.readPasted(text).outline || text, 'ใช้โครงร่างนี้แล้ว');
 });
 
 // ---- entry points --------------------------------------------------------------

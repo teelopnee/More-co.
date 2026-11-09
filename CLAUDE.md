@@ -13,8 +13,11 @@ computer and writes in Thai; reply in Thai.
   - `apps/paewai/`: แปะไว้, a no-dependency PWA "brain dump" for the Samsung tablet (Edge panel +
     pop-up window), phones and iPhone. Thai natural-language dates in `src/lib/dates.js`; `npm test`,
     `npm run build`. Sync goes through the owner's own private GitHub repo (`src/lib/sync.js`,
-    `src/lib/github.js`; token stored per device, never in the data or this repo). "ถาม Claude" uses
-    the bundled official SDK in `src/vendor/anthropic.js` with the owner's own key, or opens claude.ai.
+    `src/lib/github.js`; token stored per device, never in the data or this repo). "ถาม Claude" works
+    without a key by copy and paste: `src/lib/claude.js` writes the prompt (data, question, how to answer:
+    a ```แปะไว้ block of "งาน:/โน้ต:/ซื้อ:/จ่าย:" lines; recordings under fixed ## headings) and
+    `readPasted()` reads the pasted answer. The owner does not use an API key; the bundled official SDK
+    in `src/vendor/anthropic.js` stays as an optional path.
     `src/vendor/` holds pre-bundled third-party code; regenerate it as the app README says.
     Voice notes (`src/lib/voice.js`, IndexedDB) are transcribed by the device's own speech recognition
     (optionally the owner's Gemini/OpenAI key; Claude takes no audio). They are summarized on the device

@@ -141,6 +141,17 @@ final class Bridge {
         return true;
     }
 
+    /** The copied text, for an answer brought back from Claude (Android lets only the app in front read it). */
+    @JavascriptInterface
+    public String readClipboard() {
+        ClipboardManager cm = activity.getSystemService(ClipboardManager.class);
+        if (cm == null || !cm.hasPrimaryClip()) return "";
+        ClipData clip = cm.getPrimaryClip();
+        if (clip == null || clip.getItemCount() == 0) return "";
+        CharSequence text = clip.getItemAt(0).coerceToText(activity);
+        return text == null ? "" : text.toString();
+    }
+
     @JavascriptInterface
     public void showKeyboard() {
         ui.post(() -> {

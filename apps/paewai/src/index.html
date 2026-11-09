@@ -451,32 +451,43 @@
       <h2 id="claude-title"><svg class="title-icon" aria-hidden="true"><use href="#i-spark"/></svg>ถาม Claude</h2>
       <button type="button" class="icon-btn small" data-close aria-label="ปิด"><svg aria-hidden="true"><use href="#i-close"/></svg></button>
     </div>
-    <div class="quick" role="group" aria-label="คำถามสำเร็จรูป">
-      <button type="button" data-ask="plan">จัดตารางวันนี้</button>
-      <button type="button" data-ask="week">สรุปสัปดาห์นี้</button>
-      <button type="button" data-ask="money">ดูรายจ่ายเดือนนี้</button>
-      <button type="button" data-ask="shop">ของที่ควรซื้อเพิ่ม</button>
+    <div class="claude-ask" id="claude-ask">
+      <div class="quick" role="group" aria-label="คำถามสำเร็จรูป">
+        <button type="button" data-ask="plan">จัดตารางวันนี้</button>
+        <button type="button" data-ask="week">สรุปสัปดาห์นี้</button>
+        <button type="button" data-ask="money">ดูรายจ่ายเดือนนี้</button>
+        <button type="button" data-ask="shop">ของที่ควรซื้อเพิ่ม</button>
+      </div>
+      <textarea id="claude-q" rows="3" maxlength="4000" placeholder="ถามหรือสั่งอะไรก็ได้ เช่น วางแผนเที่ยวเชียงใหม่เสาร์อาทิตย์นี้ แล้วแปะเป็นงานให้" aria-label="คำถามถึง Claude"></textarea>
+      <label class="switch compact"><span>ส่งงาน โน้ต และรายจ่ายให้ Claude ดูด้วย</span><input type="checkbox" id="claude-context" checked></label>
     </div>
-    <textarea id="claude-q" rows="3" maxlength="4000" placeholder="ถามหรือสั่งอะไรก็ได้ เช่น วางแผนเที่ยวเชียงใหม่เสาร์อาทิตย์นี้ แล้วแปะเป็นงานให้" aria-label="คำถามถึง Claude"></textarea>
-    <label class="switch compact"><span>ส่งงาน โน้ต และรายจ่ายให้ Claude ดูด้วย</span><input type="checkbox" id="claude-context" checked></label>
-    <div class="sheet-buttons">
-      <button type="button" class="primary" data-claude="ask"><svg aria-hidden="true"><use href="#i-spark"/></svg><span>ถามในแอป</span></button>
-      <button type="button" class="secondary" data-claude="open"><span>เปิดใน Claude</span></button>
-    </div>
+    <p class="claude-job" id="claude-job" hidden></p>
+    <section class="cp-step" id="claude-step1" aria-labelledby="claude-step1-h">
+      <p class="cp-head" id="claude-step1-h"><span class="cp-n" aria-hidden="true">1</span>ส่งให้ Claude</p>
+      <p class="dim small">แอปเรียบเรียงคำถามและบอกวิธีตอบไว้ให้แล้ว แค่วางในแชตใหม่ของ Claude (แอปหรือ claude.ai) แล้วกดส่ง</p>
+      <div class="sheet-buttons">
+        <button type="button" class="primary" data-claude="open"><svg aria-hidden="true"><use href="#i-spark"/></svg><span>คัดลอกแล้วเปิด Claude</span></button>
+        <button type="button" class="secondary" data-claude="copy-prompt">คัดลอกอย่างเดียว</button>
+        <button type="button" class="secondary" data-claude="ask" hidden><span>ถามในแอป (API)</span></button>
+      </div>
+      <details class="cp-preview" id="claude-preview">
+        <summary>ดูข้อความที่จะส่ง <span class="dim" id="claude-size"></span></summary>
+        <pre id="claude-prompt"></pre>
+      </details>
+      <p class="sync-error" id="claude-long" hidden></p>
+    </section>
+    <section class="cp-step" id="claude-step2" aria-labelledby="claude-step2-h">
+      <p class="cp-head" id="claude-step2-h"><span class="cp-n" aria-hidden="true">2</span>วางคำตอบกลับมา</p>
+      <p class="dim small" id="claude-step2-hint">ใน Claude กดปุ่มคัดลอกใต้คำตอบ แล้วกลับมาวางตรงนี้ แอปจะแยกสิ่งที่ควรแปะให้เลือก</p>
+      <textarea id="claude-paste" rows="3" placeholder="วางคำตอบจาก Claude ตรงนี้" aria-label="คำตอบจาก Claude"></textarea>
+      <div class="sheet-buttons">
+        <button type="button" class="secondary" data-claude="clip">วางจากคลิปบอร์ด</button>
+        <button type="button" class="primary" data-claude="read">ใช้คำตอบนี้</button>
+      </div>
+    </section>
     <div id="claude-out" class="claude-out" aria-live="polite" hidden></div>
     <details class="more" id="claude-settings">
-      <summary>ตั้งค่าการถามในแอป (Claude API)</summary>
-      <p class="dim small">“ถามในแอป” ใช้ API key ของคุณเอง (สร้างที่ console.anthropic.com · คิดเงินตามการใช้ แยกจากแพ็กเกจ Claude Pro/Max)
-        ถ้าไม่มีคีย์ ใช้ “เปิดใน Claude” ได้ตามแพ็กเกจที่มีอยู่ แล้วคัดลอกคำตอบกลับมาวางในช่องแปะ จะจัดให้ทีละบรรทัด</p>
-      <label class="field"><span>API key</span><input id="claude-key" type="password" placeholder="sk-ant-…" autocomplete="off" spellcheck="false"></label>
-      <label class="field"><span>รุ่น</span>
-        <select id="claude-model">
-          <option value="claude-opus-5-5">Claude Opus 5.5 (ฉลาดสุด)</option>
-          <option value="claude-sonnet-5-5">Claude Sonnet 5.5 (เร็ว ถูกลง)</option>
-          <option value="claude-haiku-5-5">Claude Haiku 5.5 (เร็วสุด ถูกสุด)</option>
-        </select>
-      </label>
-      <p class="dim small">คีย์เก็บในเครื่องนี้เท่านั้น ไม่ซิงก์ ไม่อยู่ในไฟล์สำรอง และส่งตรงไปที่ api.anthropic.com</p>
+      <summary>ตั้งค่าการถอดเสียง และ API key (ไม่จำเป็น)</summary>
       <h3>ถอดเสียงเป็นข้อความ</h3>
       <label class="field"><span>ใช้</span>
         <select id="stt-provider">
@@ -505,6 +516,18 @@
           <button type="button" class="secondary" data-battery="ask">ให้แปะไว้ทำงานเบื้องหลังได้</button>
         </div>
       </div>
+      <h3>ถามในแอปด้วย API key (ไม่จำเป็น)</h3>
+      <p class="dim small">ไม่ต้องใส่ก็ใช้ได้ทุกอย่างผ่านการคัดลอกและวางกับ Claude ตามแพ็กเกจที่มีอยู่
+        ถ้าใส่ API key ของคุณเอง (สร้างที่ console.anthropic.com · คิดเงินตามการใช้ แยกจาก Claude Pro/Max) จะมีปุ่ม “ถามในแอป” ให้ถามได้โดยไม่ต้องสลับแอป</p>
+      <label class="field"><span>API key</span><input id="claude-key" type="password" placeholder="sk-ant-…" autocomplete="off" spellcheck="false"></label>
+      <label class="field"><span>รุ่น</span>
+        <select id="claude-model">
+          <option value="claude-opus-5-5">Claude Opus 5.5 (ฉลาดสุด)</option>
+          <option value="claude-sonnet-5-5">Claude Sonnet 5.5 (เร็ว ถูกลง)</option>
+          <option value="claude-haiku-5-5">Claude Haiku 5.5 (เร็วสุด ถูกสุด)</option>
+        </select>
+      </label>
+      <p class="dim small">คีย์เก็บในเครื่องนี้เท่านั้น ไม่ซิงก์ ไม่อยู่ในไฟล์สำรอง และส่งตรงไปที่ api.anthropic.com</p>
     </details>
   </div>
 </dialog>
@@ -575,8 +598,7 @@
           <p class="dim small">สรุปในเครื่อง ไม่ใช้ AI และไม่ส่งข้อความไปที่ไหน: แยกหัวข้อที่คุย ข้อสรุป สิ่งที่ต้องทำพร้อมวันเวลาและคนรับผิดชอบ เรื่องที่ยังค้าง และตัวเลขสำคัญ</p>
           <div class="sheet-buttons">
             <button type="button" class="primary" data-rv="local"><svg aria-hidden="true"><use href="#i-map"/></svg><span>สรุปในเครื่อง</span></button>
-            <button type="button" class="secondary" data-rv="analyze"><span>สรุปด้วย Claude</span></button>
-            <button type="button" class="secondary" data-rv="web">เปิดใน Claude</button>
+            <button type="button" class="secondary" data-rv="analyze"><svg aria-hidden="true"><use href="#i-spark"/></svg><span>สรุปด้วย Claude</span></button>
           </div>
         </div>
         <div id="rv-sum" class="claude-out" hidden></div>
@@ -639,7 +661,7 @@
       <h2 id="paste-title">วางโครงร่าง</h2>
       <button type="button" class="icon-btn small" data-close aria-label="ปิด"><svg aria-hidden="true"><use href="#i-close"/></svg></button>
     </div>
-    <p class="dim small">วางคำตอบจาก Claude หรือรายการหัวข้อ (<code># หัวข้อ</code> <code>- กิ่ง</code> เยื้องเข้าเป็นกิ่งย่อย) จะแทนที่มายด์แมปนี้</p>
+    <p class="dim small">วางคำตอบทั้งหมดจาก Claude (แอปหยิบโครงร่างออกมาเอง) หรือรายการหัวข้อ (<code># หัวข้อ</code> <code>- กิ่ง</code> เยื้องเข้าเป็นกิ่งย่อย) จะแทนที่มายด์แมปนี้</p>
     <textarea name="outline" rows="10" placeholder="# หัวข้อกลาง&#10;- กิ่งหลัก&#10;  - กิ่งย่อย"></textarea>
     <div class="dialog-actions">
       <button type="button" data-close>ยกเลิก</button>
