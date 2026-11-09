@@ -2191,9 +2191,9 @@ function deviceStt() {
     } catch {
       // older app
     }
-    if (i.available === false) return { where: 'android', ok: false, text: 'แท็บเล็ตนี้ไม่มีระบบรู้จำเสียง (ลองเปิด การตั้งค่า → การจัดการทั่วไป → การรู้จำเสียง)' };
+    if (i.available === false) return { where: 'android', ok: false, text: 'แท็บเล็ตนี้ยังไม่ได้เลือกระบบรู้จำเสียง: ในแอปการตั้งค่า ค้นหา “การป้อนข้อมูลด้วยเสียง” (Voice input) แล้วเลือกของ Google หรือ Samsung' };
     if (i.sdk && i.sdk < 33) return { where: 'android', ok: false, text: 'ต้องใช้ Android 13 ขึ้นไปจึงจะถอดจากเสียงที่อัดได้' };
-    if (i.refused) return { where: 'android', ok: false, retry: true, text: 'ระบบรู้จำเสียงที่ตั้งไว้ในเครื่องรับเสียงจากแอปอื่นไม่ได้ จึงปิดไว้เพื่อไม่ให้การอัดเสียงสะดุด ลองเปลี่ยนเป็น Google ใน การตั้งค่า → การจัดการทั่วไป → การรู้จำเสียง แล้วแตะลองใหม่' };
+    if (i.refused) return { where: 'android', ok: false, retry: true, text: 'ระบบรู้จำเสียงที่ตั้งไว้ในเครื่องรับเสียงจากแอปอื่นไม่ได้ จึงปิดไว้เพื่อไม่ให้การอัดเสียงสะดุด ลองเปลี่ยนเป็นของ Google (ในแอปการตั้งค่า ค้นหา “การป้อนข้อมูลด้วยเสียง” / Voice input) แล้วแตะลองใหม่' };
     const thai = {
       installed: 'ถอดภาษาไทยในเครื่องได้ทันที เสียงไม่ออกนอกเครื่อง',
       downloading: 'กำลังดาวน์โหลดภาษาไทยลงเครื่อง ระหว่างนี้จะถอดผ่านเน็ต',
@@ -2225,7 +2225,7 @@ function renderSttSettings() {
 
 $('#stt-device').addEventListener('click', (e) => {
   const act = e.target.closest('[data-stt]')?.dataset.stt;
-  if (act === 'download') toast(android?.sttDownload?.() ? 'เริ่มดาวน์โหลดภาษาไทยแล้ว (ดูความคืบหน้าในการแจ้งเตือน)' : 'ดาวน์โหลดจากในแอปไม่ได้ ไปที่ การตั้งค่า → การจัดการทั่วไป → การรู้จำเสียง');
+  if (act === 'download') toast(android?.sttDownload?.() ? 'เริ่มดาวน์โหลดภาษาไทยแล้ว (ดูความคืบหน้าในการแจ้งเตือน)' : 'ดาวน์โหลดจากในแอปไม่ได้ ในแอปการตั้งค่า ค้นหา “การรู้จำเสียง” หรือ “Voice input” แล้วเพิ่มภาษาไทย');
   if (act === 'retry') android?.sttReset?.();
   setTimeout(renderSttSettings, 800);
 });
