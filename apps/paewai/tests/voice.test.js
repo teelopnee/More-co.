@@ -84,3 +84,24 @@ test('Claude: summary and mind map from a transcript', () => {
   assert.match(readNote({ stop_reason: 'refusal', content: [] }).note, /ไม่สรุป/);
   assert.match(noteWebPrompt('ข้อความ'), /# หัวข้อกลาง/);
 });
+
+test('device transcription helpers', async () => {
+  const { tail, looksLikeTranscript, PROVIDERS } = await import('../src/lib/voice.js');
+  assert.equal(PROVIDERS.device.name, 'ระบบของเครื่อง');
+  assert.equal(tail('สั้น ๆ'), 'สั้น ๆ');
+  const long = Array.from({ length: 60 }, (_, i) => `คำที่${i}`).join(' ');
+  const t = tail(long, 40);
+  assert.ok(t.startsWith('…') && t.length <= 41 && long.endsWith(t.slice(1)));
+  assert.equal(looksLikeTranscript('ซื้อนม ไข่'), false);
+  assert.equal(looksLikeTranscript('ก'.repeat(300)), true);
+  const meeting = 'ผู้พูด 1: สวัสดีครับ วันนี้เราจะคุยเรื่องแผนการตลาด\nผู้พูด 2: สวัสดีค่ะ พร้อมแล้วค่ะ\nผู้พูด 1: เริ่มจากงบโฆษณาออนไลน์ก่อนเลย\nผู้พูด 2: ได้ค่ะ เดือนนี้ใช้ไปแล้วครึ่งหนึ่ง';
+  assert.ok(meeting.length > 120 && meeting.length < 280);
+  assert.equal(looksLikeTranscript(meeting), true, 'several lines of talk');
+});
+
+test('text-only recordings survive saving', async () => {
+  const S = await import('../src/lib/store.js');
+  let s = S.addRec(S.emptyState(), { id: 'x1', title: 'ถอดความจาก Samsung', parts: 0, origin: 'share', transcript: 'ข้อความยาว' });
+  s = S.sanitize(JSON.parse(JSON.stringify(s)));
+  assert.deepEqual([s.recs[0].parts, s.recs[0].origin, s.recs[0].transcript], [0, 'share', 'ข้อความยาว']);
+});

@@ -64,6 +64,7 @@ public class MainActivity extends Activity implements Bridge.Owner {
             requestPermissions(new String[] {Manifest.permission.POST_NOTIFICATIONS}, 3);
         }
         handle(getIntent());
+        SpeechSupport.refresh(this);
     }
 
     @Override
@@ -78,6 +79,25 @@ public class MainActivity extends Activity implements Bridge.Owner {
         if (view != null) host.js("window.paewai&&paewai.show(" + JSONObject.quote(view) + ")");
         String rec = intent.getStringExtra("rec");
         if (rec != null) host.js("window.paewai&&paewai.openRec(" + JSONObject.quote(rec) + ")");
+        // Audio shared from another app (Samsung Voice Recorder, LINE…): keep it and turn it into text.
+        if (Intent.ACTION_SEND.equals(intent.getAction()) && intent.getType() != null && intent.getType().startsWith("audio/")) {
+            Uri uri = Build.VERSION.SDK_INT >= 33 ? intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri.class) : legacyStream(intent);
+            String type = intent.getType();
+            setIntent(new Intent(this, MainActivity.class));
+            if (uri != null) {
+                new Thread(() -> {
+                    String id = RecorderService.importShared(this, uri, type);
+                    runOnUiThread(() -> host.js(id == null
+                            ? "window.paewai&&paewai.toast('เปิดไฟล์เสียงนี้ไม่ได้')"
+                            : "window.paewai&&paewai.openRec(" + JSONObject.quote(id) + ")"));
+                }, "paewai-import").start();
+            }
+        }
+    }
+
+    @SuppressWarnings("deprecation")
+    private static Uri legacyStream(Intent i) {
+        return i.getParcelableExtra(Intent.EXTRA_STREAM);
     }
 
     @Override

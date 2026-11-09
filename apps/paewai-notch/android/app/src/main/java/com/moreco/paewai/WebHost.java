@@ -101,13 +101,16 @@ final class WebHost {
         }
     }
 
-    /** /rec/<id>/<part>.m4a → a voice note saved by RecorderService. */
+    /** /rec/<id>/<part>.<ext> → a voice note saved by RecorderService. */
     private static WebResourceResponse recording(Activity a, String path) {
-        java.util.regex.Matcher m = java.util.regex.Pattern.compile("^/rec/([a-z0-9]{4,40})/(\\d{1,3})\\.m4a$").matcher(path);
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("^/rec/([a-z0-9]{4,40})/(\\d{1,3})\\.([a-z0-9]{2,5})$").matcher(path);
         if (!m.matches()) return notFound();
         java.io.File f = RecorderService.part(a, m.group(1), Integer.parseInt(m.group(2)));
+        if (f == null) return notFound();
+        String ext = f.getName().substring(f.getName().lastIndexOf('.') + 1);
+        String type = ext.equals("m4a") ? "audio/mp4" : ext.equals("mp3") ? "audio/mpeg" : ext.equals("3gp") ? "audio/3gpp" : "audio/" + ext;
         try {
-            WebResourceResponse r = new WebResourceResponse("audio/mp4", null, new java.io.FileInputStream(f));
+            WebResourceResponse r = new WebResourceResponse(type, null, new java.io.FileInputStream(f));
             java.util.Map<String, String> headers = new java.util.HashMap<>();
             headers.put("Cache-Control", "no-store");
             headers.put("Content-Length", String.valueOf(f.length()));

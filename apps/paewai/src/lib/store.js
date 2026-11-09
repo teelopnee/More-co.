@@ -107,9 +107,9 @@ export function sanitize(raw) {
       at,
       durationMs: Number.isFinite(r.durationMs) && r.durationMs > 0 ? Math.round(r.durationMs) : 0,
       mime: typeof r.mime === 'string' ? r.mime.slice(0, 60) : '',
-      parts: Number.isInteger(r.parts) && r.parts > 0 ? Math.min(r.parts, 100) : 1,
+      parts: Number.isInteger(r.parts) && r.parts >= 0 ? Math.min(r.parts, 100) : 1, // 0: text only (shared in)
       device: typeof r.device === 'string' ? r.device.slice(0, 40) : '',
-      origin: r.origin === 'android' ? 'android' : 'web',
+      origin: ['android', 'share'].includes(r.origin) ? r.origin : 'web',
       transcript: typeof r.transcript === 'string' ? r.transcript.slice(0, 200_000) : '',
       summary: typeof r.summary === 'string' ? r.summary.slice(0, 20_000) : '',
       mapId: typeof r.mapId === 'string' ? r.mapId : null,

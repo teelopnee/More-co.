@@ -1,9 +1,10 @@
 // Voice notes: record (MediaRecorder), keep the audio safe on this device (IndexedDB, saved every
-// few seconds so a crash or a closed tab loses at most a moment), and transcribe it with the
-// person's own key (OpenAI gpt-transcribe or Google Gemini). Claude cannot take audio, so it
-// works on the transcript (lib/claude.js).
+// few seconds so a crash or a closed tab loses at most a moment), and turn speech into text.
+// Text comes from the device itself by default (no other AI): the Android app's own speech
+// recognition, or the browser's live captions while recording. A key for Google Gemini or OpenAI
+// is optional. Claude cannot take audio, so it works on the transcript (lib/claude.js).
 
-export const VOICE_KEY = 'paewai:voice'; // { provider, openaiKey, geminiKey } on this device only
+export const VOICE_KEY = 'paewai:voice'; // { provider: device|gemini|openai, openaiKey, geminiKey } on this device only
 export const PART_MS = 25 * 60_000; // a new file every 25 minutes: each part stays well under upload limits
 const CHUNK_MS = 4000;
 const MAX_UPLOAD = 24 * 1024 * 1024;
@@ -142,8 +143,8 @@ export const extFor = (mime) => (/mp4|aac|m4a/.test(mime) ? 'm4a' : /ogg/.test(m
  * state: 'idle' | 'recording' | 'paused' | 'stopped'
  */
 export class Recorder {
-  constructor({ id, onlevel = () => {}, onstate = () => {}, onerror = () => {} }) {
-    Object.assign(this, { id, onlevel, onstate, onerror });
+  constructor({ id, onlevel = () => {}, onstate = () => {}, onerror = () => {}, onmute = () => {} }) {
+    Object.assign(this, { id, onlevel, onstate, onerror, onmute });
     this.state = 'idle';
     this.part = 0;
     this.seq = 0;
@@ -164,7 +165,11 @@ export class Recorder {
     this.at = Date.now();
     await audio.putMeta({ id: this.id, at: this.at, mime: this.format.mime });
     // If the microphone goes away (another app took it, permission revoked): keep what we have.
-    for (const track of this.stream.getAudioTracks()) track.addEventListener('ended', () => this.state !== 'stopped' && this.stop('ไมโครโฟนถูกปิดหรือแอปอื่นใช้อยู่ บันทึกส่วนที่อัดได้ไว้แล้ว'));
+    for (const track of this.stream.getAudioTracks()) {
+      track.addEventListener('ended', () => this.state !== 'stopped' && this.stop('ไมโครโฟนถูกปิดหรือแอปอื่นใช้อยู่ บันทึกส่วนที่อัดได้ไว้แล้ว'));
+      // Something else (e.g. live captions) took the microphone: the app turns that off.
+      track.addEventListener('mute', () => this.state === 'recording' && this.onmute());
+    }
     this.meter();
     this.wake();
     this.begin();
@@ -266,12 +271,27 @@ export class Recorder {
       an.fftSize = 1024;
       src.connect(an);
       const buf = new Float32Array(an.fftSize);
+      let heard = false;
+      let zeroSince = 0;
       const loop = () => {
         an.getFloatTimeDomainData(buf);
         let sum = 0;
         for (const v of buf) sum += v * v;
         const rms = Math.sqrt(sum / buf.length);
         this.onlevel(this.state === 'recording' ? Math.min(1, rms * 4) : 0);
+        // A real microphone is never exactly silent: exact zeros mean we were cut off.
+        if (this.state === 'recording') {
+          if (rms > 0) {
+            heard = true;
+            zeroSince = 0;
+          } else if (heard) {
+            zeroSince ||= Date.now();
+            if (Date.now() - zeroSince > 2000) {
+              zeroSince = Infinity;
+              this.onmute();
+            }
+          }
+        }
         this.raf = requestAnimationFrame(loop);
       };
       loop();
@@ -300,6 +320,7 @@ export class Recorder {
 // Transcription with the person's own key
 
 export const PROVIDERS = {
+  device: { name: 'ระบบของเครื่อง', model: 'speech recognition', keyHint: '', keyUrl: '' },
   openai: { name: 'OpenAI', model: 'gpt-transcribe', keyHint: 'sk-…', keyUrl: 'https://platform.openai.com/api-keys' },
   gemini: { name: 'Google Gemini', model: 'gemini-3.8-flash', keyHint: 'AIza…', keyUrl: 'https://aistudio.google.com/apikey' },
 };
@@ -409,4 +430,115 @@ export const clock = (ms) => {
   const m = Math.floor((s % 3600) / 60);
   const ss = String(s % 60).padStart(2, '0');
   return h ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${m}:${ss}`;
+};
+
+// ---------------------------------------------------------------------------
+// Live captions from the browser's own speech recognition (no key, no other AI service)
+
+const SR = typeof window !== 'undefined' ? window.SpeechRecognition || window.webkitSpeechRecognition : null;
+
+/**
+ * Thai text while recording, from the browser (Chrome: Google's speech service; Safari: Apple's).
+ * Restarts itself when the browser ends a session; gives up quietly if it is not allowed.
+ * onchange(caption) on every update; caption.text is the final text, caption.partial the words in progress.
+ */
+export class LiveCaption {
+  static get supported() {
+    return !!SR;
+  }
+
+  constructor({ onchange = () => {}, lang = 'th-TH' } = {}) {
+    Object.assign(this, { onchange, lang });
+    this.text = '';
+    this.partial = '';
+    this.active = false;
+    this.failures = 0;
+    this.state = 'off';
+  }
+
+  start() {
+    if (!SR || this.active) return;
+    this.active = true;
+    this.state = 'listening';
+    this.open();
+  }
+
+  open() {
+    if (!this.active) return;
+    const r = new SR();
+    r.lang = this.lang;
+    r.continuous = true;
+    r.interimResults = true;
+    r.onresult = (e) => {
+      let partial = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const res = e.results[i];
+        const t = res[0]?.transcript?.trim() ?? '';
+        if (!t) continue;
+        if (res.isFinal) this.text = this.text ? `${this.text} ${t}` : t;
+        else partial += (partial ? ' ' : '') + t;
+      }
+      this.partial = partial;
+      this.failures = 0;
+      this.onchange(this);
+    };
+    r.onerror = (e) => {
+      if (['not-allowed', 'service-not-allowed', 'language-not-supported', 'audio-capture'].includes(e.error)) {
+        this.state = e.error === 'language-not-supported' ? 'unsupported' : 'blocked';
+        this.active = false;
+        this.onchange(this);
+      } else this.failures++;
+    };
+    r.onend = () => {
+      if (this.partial) {
+        this.text = this.text ? `${this.text} ${this.partial}` : this.partial;
+        this.partial = '';
+        this.onchange(this);
+      }
+      // Browsers end a session after a pause: start another while recording.
+      if (this.active && this.failures < 6) setTimeout(() => this.open(), 250);
+      else if (this.active) {
+        this.active = false;
+        this.state = 'failed';
+        this.onchange(this);
+      }
+    };
+    this.rec = r;
+    try {
+      r.start();
+    } catch {
+      this.failures++;
+    }
+  }
+
+  /** Ends and returns the text. */
+  stop() {
+    this.active = false;
+    if (this.state === 'listening') this.state = 'done';
+    try {
+      this.rec?.stop();
+    } catch {
+      // already stopped
+    }
+    const all = this.partial ? `${this.text} ${this.partial}`.trim() : this.text;
+    this.text = all;
+    this.partial = '';
+    return all;
+  }
+}
+
+/** The last words of a running transcript, for the recording screen. */
+export function tail(text, max = 160) {
+  const t = String(text ?? '').trim();
+  if (t.length <= max) return t;
+  // Start at a word: drop a cut-off first word (Thai words without spaces just get cut).
+  const cut = t.slice(-max);
+  const clean = cut.replace(/^\S{0,30}\s+/, '');
+  return `…${clean || cut}`;
+}
+
+/** Long text shared in (a transcript from Samsung Voice Recorder, notes from a meeting) rather than one thing to do. */
+export const looksLikeTranscript = (text) => {
+  const t = String(text ?? '').trim();
+  return t.length > 280 || (t.length > 120 && t.split(/\n+/).filter((l) => l.trim()).length >= 4);
 };

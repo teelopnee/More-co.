@@ -180,7 +180,7 @@ final class Bridge {
         send(RecorderService.STOP);
     }
 
-    /** { state: idle|recording|paused, id, elapsedMs, level } */
+    /** { state: idle|recording|paused, id, elapsedMs, level, stt, text (the last words), partial } */
     @JavascriptInterface
     public String recState() {
         JSONObject o = new JSONObject();
@@ -191,10 +191,64 @@ final class Bridge {
             o.put("at", RecorderService.startedAt);
             o.put("elapsedMs", RecorderService.elapsed());
             o.put("level", RecorderService.level());
+            Transcriber t = RecorderService.live;
+            o.put("stt", t != null ? t.state : "off");
+            String text = t != null ? t.fullText() : "";
+            o.put("text", text.length() > 400 ? text.substring(text.length() - 400) : text);
+            o.put("words", text.length());
         } catch (Exception ignored) {
             // JSONObject.put only throws for NaN
         }
         return o.toString();
+    }
+
+    /** Thai speech recognition on this tablet (no other AI): see SpeechSupport. */
+    @JavascriptInterface
+    public String sttInfo() {
+        return SpeechSupport.info(activity);
+    }
+
+    @JavascriptInterface
+    public void sttRefresh() {
+        ui.post(() -> SpeechSupport.refresh(activity));
+    }
+
+    @JavascriptInterface
+    public boolean sttDownload() {
+        java.util.concurrent.atomic.AtomicBoolean ok = new java.util.concurrent.atomic.AtomicBoolean();
+        java.util.concurrent.CountDownLatch done = new java.util.concurrent.CountDownLatch(1);
+        ui.post(() -> {
+            ok.set(SpeechSupport.download(activity));
+            done.countDown();
+        });
+        try {
+            done.await(3, java.util.concurrent.TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        return ok.get();
+    }
+
+    @JavascriptInterface
+    public void sttReset() {
+        ui.post(() -> SpeechSupport.reset(activity));
+    }
+
+    /** Transcribes a saved recording with the tablet's own speech recognition: "ok" | "running" | "unsupported" | "missing". */
+    @JavascriptInterface
+    public String recTranscribe(String id) {
+        java.util.concurrent.atomic.AtomicReference<String> res = new java.util.concurrent.atomic.AtomicReference<>("missing");
+        java.util.concurrent.CountDownLatch done = new java.util.concurrent.CountDownLatch(1);
+        ui.post(() -> {
+            res.set(RecorderService.transcribeSaved(activity, id));
+            done.countDown();
+        });
+        try {
+            done.await(3, java.util.concurrent.TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        return res.get();
     }
 
     /** Finished recordings on this tablet: [{ id, at, durationMs, parts, mime }]. */
@@ -206,7 +260,9 @@ final class Bridge {
     /** Where the page can fetch a part of a recording. */
     @JavascriptInterface
     public String recUrl(String id, int part) {
-        return WebHost.ORIGIN + "/rec/" + id + "/" + part + ".m4a";
+        java.io.File f = RecorderService.validId(id) ? RecorderService.part(activity, id, part) : null;
+        String name = f == null ? part + ".aac" : f.getName().substring(f.getName().indexOf('-') + 1);
+        return WebHost.ORIGIN + "/rec/" + id + "/" + name;
     }
 
     @JavascriptInterface

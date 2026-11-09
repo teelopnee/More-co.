@@ -477,17 +477,26 @@
       </label>
       <p class="dim small">คีย์เก็บในเครื่องนี้เท่านั้น ไม่ซิงก์ ไม่อยู่ในไฟล์สำรอง และส่งตรงไปที่ api.anthropic.com</p>
       <h3>ถอดเสียงเป็นข้อความ</h3>
-      <p class="dim small">Claude ฟังไฟล์เสียงไม่ได้ การถอดเสียงจึงใช้บริการอื่นด้วยคีย์ของคุณเอง แล้วให้ Claude สรุปและทำมายด์แมปต่อ</p>
-      <label class="field"><span>บริการถอดเสียง</span>
+      <label class="field"><span>ใช้</span>
         <select id="stt-provider">
-          <option value="gemini">Google Gemini (มีโควตาฟรี · ข้อมูลฟรีถูกนำไปพัฒนาโมเดล)</option>
-          <option value="openai">OpenAI gpt-transcribe (จ่ายตามการใช้)</option>
+          <option value="device">ระบบถอดเสียงของเครื่อง (ไม่ต้องใช้คีย์ ไม่ใช้ AI อื่น)</option>
+          <option value="gemini">Google Gemini (ใช้คีย์)</option>
+          <option value="openai">OpenAI gpt-transcribe (ใช้คีย์)</option>
         </select>
       </label>
-      <label class="field"><span>คีย์ Gemini</span><input id="stt-gemini" type="password" placeholder="AIza…" autocomplete="off" spellcheck="false"></label>
-      <label class="field"><span>คีย์ OpenAI</span><input id="stt-openai" type="password" placeholder="sk-…" autocomplete="off" spellcheck="false"></label>
-      <p class="dim small">สร้างคีย์ Gemini ที่ <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>
-        · OpenAI ที่ <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">platform.openai.com/api-keys</a> · คีย์อยู่ในเครื่องนี้เท่านั้น</p>
+      <div class="stt-device" id="stt-device">
+        <p class="dim small" id="stt-device-status"></p>
+        <div class="sheet-buttons">
+          <button type="button" class="secondary" data-stt="download" hidden>ดาวน์โหลดภาษาไทยลงเครื่อง</button>
+          <button type="button" class="secondary" data-stt="retry" hidden>ลองใหม่</button>
+        </div>
+      </div>
+      <div class="stt-keys" id="stt-keys">
+        <label class="field"><span>คีย์ Gemini</span><input id="stt-gemini" type="password" placeholder="AIza…" autocomplete="off" spellcheck="false"></label>
+        <label class="field"><span>คีย์ OpenAI</span><input id="stt-openai" type="password" placeholder="sk-…" autocomplete="off" spellcheck="false"></label>
+        <p class="dim small">Gemini มีโควตาฟรี แต่ข้อมูลในโควตาฟรีถูกนำไปพัฒนาโมเดล · สร้างคีย์ที่ <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>
+          หรือ <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">platform.openai.com/api-keys</a> · คีย์อยู่ในเครื่องนี้เท่านั้น</p>
+      </div>
     </details>
   </div>
 </dialog>
@@ -502,6 +511,7 @@
     <div class="rec-stage">
       <p class="rec-time" id="rec-time" aria-live="off">0:00</p>
       <canvas class="wave" id="rec-wave" aria-hidden="true"></canvas>
+      <div class="rec-live" id="rec-live" aria-live="off" hidden><span class="rec-live-text"></span><span class="rec-live-partial"></span></div>
       <p class="dim rec-note" id="rec-note">หน้าจอจะเปิดค้างไว้ระหว่างอัด · บันทึกลงเครื่องทุก 4 วินาที</p>
     </div>
     <div class="rec-controls">
@@ -651,7 +661,9 @@
           <span>ปัดแผงด่วนลง → แก้ไข → ลากปุ่ม <em>อัดเสียง</em> เข้ามา (แตะ = เริ่ม แตะอีกครั้ง = หยุด)
             · ปุ่มด้านข้าง: การตั้งค่า → <em>ฟีเจอร์ขั้นสูง</em> → <em>ปุ่มด้านข้าง</em> → <em>กดสองครั้ง</em> → เปิดแอป → <em>อัดเสียง แปะไว้</em>
             · อัดต่อได้แม้ปิดจอหรือใช้แอปอื่น แถบที่ notch เป็นจุดแดงพร้อมเวลา หยุดได้จากการแจ้งเตือน
-            · เสร็จแล้วอยู่ใน โน้ต → บันทึกเสียง ถอดความ สรุป และทำมายด์แมปได้</span>
+            · <em>ถอดเป็นข้อความไปพร้อมกัน</em> ด้วยระบบรู้จำเสียงของแท็บเล็ต (ตัวเดียวกับพิมพ์ด้วยเสียง) ไม่ใช้ AI อื่น ไม่ต้องใช้คีย์
+            · อัดด้วยแอปบันทึกเสียงของ Samsung ก็ได้: แชร์ไฟล์เสียง → <em>แปะไว้ (ถอดเป็นข้อความ)</em> หรือแชร์ข้อความถอดเสียงของ Samsung มาที่แปะไว้
+            · เสร็จแล้วอยู่ใน โน้ต → บันทึกเสียง สรุปและทำมายด์แมปต่อได้</span>
         </li>
       </ol>
       <div class="group">

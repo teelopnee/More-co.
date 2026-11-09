@@ -431,6 +431,16 @@ function route(st, r, now = Date.now()) {
 
 /** Sorts and saves what was typed or shared; returns what to tell the person. */
 function capture(text, { shared = false } = {}) {
+  if (shared && V.looksLikeTranscript(text)) {
+    // A transcript (Samsung Voice Recorder's "share text") or long notes: keep it whole, ready for a summary.
+    const now = Date.now();
+    const first = text.trim().split(/\n/)[0].replace(/^#+\s*/, '').trim();
+    const title = first.length > 4 && first.length <= 60 ? first : `ข้อความที่แชร์มา ${shortDate(dayKey(new Date(now)))} ${timeOf(new Date(now))}`;
+    const id = S.uid(now);
+    commit(S.addRec(state, { id, at: now, title, parts: 0, durationMs: 0, origin: 'share', transcript: text.trim(), device: deviceName() }), { undoable: true });
+    setTimeout(() => openRec(id, 'text'), 50);
+    return { kind: 'rec', msg: 'เก็บเป็นบันทึกแล้ว แตะ “สรุป” เพื่อทำมายด์แมป' };
+  }
   const r = shared ? classify(text, Date.now()) : captureSort(text);
   if (r.kind === 'money' && !r.amount) return { error: 'ใส่จำนวนเงินด้วย เช่น “ข้าวมันไก่ 50”' };
   const next = route(state, r);
@@ -1991,6 +2001,8 @@ function openClaude(question = '', { settings = false } = {}) {
   $('#stt-provider').value = sttProvider();
   $('#stt-gemini').value = voiceCfg.geminiKey ?? '';
   $('#stt-openai').value = voiceCfg.openaiKey ?? '';
+  android?.sttRefresh?.();
+  renderSttSettings();
   $('#claude-settings').open = settings;
   if (!claudeDialog.open) claudeDialog.showModal();
   if (settings) requestAnimationFrame(() => $('#claude-settings').scrollIntoView({ block: 'start', behavior: 'smooth' }));
@@ -2166,8 +2178,57 @@ const writeLocal = (key, value) => {
 };
 
 let voiceCfg = readLocal(V.VOICE_KEY, {}); // { provider, geminiKey, openaiKey } on this device only
-const sttProvider = () => (V.PROVIDERS[voiceCfg.provider] ? voiceCfg.provider : 'gemini');
-const sttKey = () => (sttProvider() === 'openai' ? voiceCfg.openaiKey : voiceCfg.geminiKey) ?? '';
+// Default: the device's own speech recognition (no key, no other AI).
+const sttProvider = () => (V.PROVIDERS[voiceCfg.provider] ? voiceCfg.provider : 'device');
+const sttKey = () => (sttProvider() === 'openai' ? voiceCfg.openaiKey : sttProvider() === 'gemini' ? voiceCfg.geminiKey : '') ?? '';
+
+/** What "ระบบของเครื่อง" can do here: { where: android|browser|none, ok, text, download, retry }. */
+function deviceStt() {
+  if (android?.sttInfo) {
+    let i = {};
+    try {
+      i = JSON.parse(android.sttInfo());
+    } catch {
+      // older app
+    }
+    if (i.available === false) return { where: 'android', ok: false, text: 'แท็บเล็ตนี้ไม่มีระบบรู้จำเสียง (ลองเปิด การตั้งค่า → การจัดการทั่วไป → การรู้จำเสียง)' };
+    if (i.sdk && i.sdk < 33) return { where: 'android', ok: false, text: 'ต้องใช้ Android 13 ขึ้นไปจึงจะถอดจากเสียงที่อัดได้' };
+    if (i.refused) return { where: 'android', ok: false, retry: true, text: 'ระบบรู้จำเสียงที่ตั้งไว้ในเครื่องรับเสียงจากแอปอื่นไม่ได้ จึงปิดไว้เพื่อไม่ให้การอัดเสียงสะดุด ลองเปลี่ยนเป็น Google ใน การตั้งค่า → การจัดการทั่วไป → การรู้จำเสียง แล้วแตะลองใหม่' };
+    const thai = {
+      installed: 'ถอดภาษาไทยในเครื่องได้ทันที เสียงไม่ออกนอกเครื่อง',
+      downloading: 'กำลังดาวน์โหลดภาษาไทยลงเครื่อง ระหว่างนี้จะถอดผ่านเน็ต',
+      downloadable: 'ถอดได้เลย (ผ่านเน็ต) · ดาวน์โหลดภาษาไทยลงเครื่องเพื่อถอดได้แม้ไม่มีเน็ต และเสียงไม่ออกนอกเครื่อง',
+      online: 'ถอดด้วยระบบรู้จำเสียงที่มากับเครื่อง (ต้องต่อเน็ต)',
+      none: 'ระบบรู้จำเสียงในเครื่องยังไม่รองรับภาษาไทย',
+    }[i.thai];
+    return {
+      where: 'android',
+      ok: i.thai !== 'none',
+      download: i.thai === 'downloadable',
+      text: `${thai ?? 'ถอดด้วยระบบรู้จำเสียงที่มากับแท็บเล็ต (Samsung/Google) ระหว่างอัด ข้อความพร้อมตอนกดหยุด'}`,
+    };
+  }
+  if (V.LiveCaption.supported) return { where: 'browser', ok: true, text: 'ถอดสดระหว่างอัดด้วยระบบของเบราว์เซอร์ (ต้องต่อเน็ต) · ถอดไฟล์ที่อัดไว้แล้วต้องใช้แอป Android หรือบริการที่ใช้คีย์' };
+  return { where: 'none', ok: false, text: 'เบราว์เซอร์นี้ถอดเสียงเองไม่ได้ ใช้แอปแปะไว้บน Android หรือเลือกบริการที่ใช้คีย์' };
+}
+
+function renderSttSettings() {
+  const device = sttProvider() === 'device';
+  $('#stt-device').hidden = !device;
+  $('#stt-keys').hidden = device;
+  if (!device) return;
+  const d = deviceStt();
+  $('#stt-device-status').textContent = d.text;
+  $('[data-stt="download"]').hidden = !d.download;
+  $('[data-stt="retry"]').hidden = !d.retry;
+}
+
+$('#stt-device').addEventListener('click', (e) => {
+  const act = e.target.closest('[data-stt]')?.dataset.stt;
+  if (act === 'download') toast(android?.sttDownload?.() ? 'เริ่มดาวน์โหลดภาษาไทยแล้ว (ดูความคืบหน้าในการแจ้งเตือน)' : 'ดาวน์โหลดจากในแอปไม่ได้ ไปที่ การตั้งค่า → การจัดการทั่วไป → การรู้จำเสียง');
+  if (act === 'retry') android?.sttReset?.();
+  setTimeout(renderSttSettings, 800);
+});
 
 for (const [sel, field] of [
   ['#stt-provider', 'provider'],
@@ -2177,6 +2238,7 @@ for (const [sel, field] of [
   $(sel).addEventListener('change', (e) => {
     voiceCfg = { ...voiceCfg, [field]: e.target.value.trim() };
     writeLocal(V.VOICE_KEY, voiceCfg);
+    renderSttSettings();
     if (recview.open) renderRecView();
   });
 }
@@ -2217,15 +2279,22 @@ let cancelArmed = 0;
 class NativeRecorder {
   constructor() {
     this.native = true;
-    this.poll();
+    this.polled = 0;
+    this.poll(true);
   }
-  poll() {
+  /** Asks the app at most ~7 times a second. */
+  poll(now = false) {
+    if (!now && performance.now() - this.polled < 140) return this.last;
+    this.polled = performance.now();
     try {
       this.last = JSON.parse(android.recState());
     } catch {
       this.last = { state: 'idle' };
     }
     return this.last;
+  }
+  get text() {
+    return this.last.text || '';
   }
   get state() {
     return this.last.state === 'idle' ? 'stopped' : this.last.state;
@@ -2243,6 +2312,7 @@ class NativeRecorder {
     android.recResume();
   }
   async stop() {
+    this.poll(true);
     const { id, at } = this.last;
     const length = this.durationMs;
     android.recStop();
@@ -2272,6 +2342,7 @@ function showNativeRecorder() {
     recorder.poll();
     recLevel = recorder.level;
     if (recorder.state !== before) renderRecState();
+    renderLive(recorder.text, '');
     // Stopped from the notification, the tile or the side key: save it like the stop button.
     if (recorder.state === 'stopped') {
       stopRecording();
@@ -2319,15 +2390,29 @@ async function startRecording() {
     onlevel: (l) => (recLevel = l),
     onstate: () => renderRecState(),
     onerror: (m) => toast(m),
+    // Live captions took the microphone away from the recording: the recording comes first.
+    onmute: () => {
+      if (!caption?.active) return;
+      caption.stop();
+      captionBlocked = true;
+      toast('ระบบถอดสดของเบราว์เซอร์นี้ใช้ไมโครโฟนพร้อมการอัดไม่ได้ ปิดการถอดสดแล้ว เสียงยังอัดต่อ');
+      renderLive('', '');
+    },
   });
   recorder = rec;
   recBars = [];
+  caption = null;
+  renderLive('', '');
   for (const d of $$('dialog[open]')) if (d !== recDialog) d.close();
   recDialog.showModal();
   renderRecState();
   try {
     await rec.start();
     navigator.storage?.persist?.().catch(() => {});
+    if (sttProvider() === 'device' && V.LiveCaption.supported && !captionBlocked) {
+      caption = new V.LiveCaption({ onchange: (c) => renderLive(c.text, c.partial) });
+      caption.start();
+    }
   } catch (err) {
     recorder = null;
     recDialog.close();
@@ -2346,6 +2431,18 @@ async function startRecording() {
     recRaf = requestAnimationFrame(loop);
   };
   loop();
+}
+
+let caption = null; // browser live captions while recording
+let captionBlocked = false; // it took the microphone once on this device: not again this session
+
+/** The words so far under the waveform, like the live transcript of a phone's recorder. */
+function renderLive(text, partial) {
+  const box = $('#rec-live');
+  const t = V.tail(text, 180);
+  box.hidden = !t && !partial;
+  $('.rec-live-text', box).textContent = t;
+  $('.rec-live-partial', box).textContent = partial ? ` ${partial}` : '';
 }
 
 function renderRecState() {
@@ -2397,9 +2494,12 @@ async function stopRecording() {
   const rec = recorder;
   if (!rec) return;
   cancelAnimationFrame(recRaf);
+  const words = caption ? caption.stop() : '';
+  caption = null;
   const res = await rec.stop();
   recorder = null;
   recDialog.close();
+  renderLive('', '');
   const origin = res.origin ?? 'web';
   if (res.durationMs < 800 || !res.parts) {
     if (origin === 'android') android?.recDelete?.(res.id);
@@ -2412,9 +2512,35 @@ async function stopRecording() {
     return;
   }
   const title = `บันทึกเสียง ${shortDate(dayKey(new Date(res.at)))} ${timeOf(new Date(res.at))}`;
-  commit(S.addRec(state, { id: res.id, title, at: res.at, durationMs: res.durationMs, mime: res.mime, parts: res.parts, device: deviceName(), origin }));
+  const transcript = (origin === 'android' ? res.transcript : words) || '';
+  commit(S.addRec(state, { id: res.id, title, at: res.at, durationMs: res.durationMs, mime: res.mime, parts: res.parts, device: deviceName(), origin, transcript }));
   openRec(res.id);
-  if (sttKey()) transcribeRec(res.id);
+  if (origin === 'android' && res.stt === 'listening') waitNativeText(res.id);
+  else if (!transcript && (sttKey() || (sttProvider() === 'device' && origin === 'android'))) transcribeRec(res.id);
+}
+
+/** The Android app is still writing the last words of a recording's text: pick them up. */
+async function waitNativeText(id) {
+  busy.set(id, { kind: 'stt', device: true });
+  if (rvId === id) renderRecView();
+  try {
+    for (let i = 0; i < 40; i++) {
+      await new Promise((r) => setTimeout(r, 1000));
+      let m = null;
+      try {
+        m = JSON.parse(android.recList()).find((x) => x.id === id);
+      } catch {
+        break;
+      }
+      if (!m) break;
+      if (m.stt === 'listening' || m.stt === 'running') continue;
+      if (m.transcript && findRec(id)) commit(S.editRec(state, id, { transcript: m.transcript }));
+      break;
+    }
+  } finally {
+    busy.delete(id);
+    if (rvId === id) renderRecView();
+  }
 }
 
 recDialog.addEventListener('cancel', (e) => {
@@ -2481,7 +2607,9 @@ function openRec(id, tab = 'text') {
   rvTab(tab);
   if (!recview.open) recview.showModal();
   renderRecView();
-  loadPlayer();
+  loadPlayer().catch(() => {
+    $('#rv-player').hidden = true;
+  });
 }
 
 function rvTab(name) {
@@ -2506,14 +2634,19 @@ function renderRecView() {
   $('#rv-text').hidden = !hasText;
   if (hasText && document.activeElement !== $('#rv-text')) $('#rv-text').value = r.transcript;
   const p = V.PROVIDERS[sttProvider()];
+  const onDevice = sttProvider() === 'device';
   $('#rv-stt-status').textContent =
     job?.kind === 'stt'
-      ? `กำลังถอดเสียงด้วย ${p.name}${job.total > 1 ? ` (ส่วนที่ ${Math.min(job.done + 1, job.total)}/${job.total})` : ''}…`
-      : sttKey()
-        ? `ใช้ ${p.name} (${p.model}) · ส่งไฟล์เสียงไปถอดแล้วเก็บข้อความไว้ที่นี่`
-        : 'ยังไม่ได้ใส่คีย์บริการถอดเสียง แตะ “ตั้งค่าบริการ”';
+      ? job.device
+        ? 'กำลังถอดด้วยระบบของเครื่อง…'
+        : `กำลังถอดเสียงด้วย ${p.name}${job.total > 1 ? ` (ส่วนที่ ${Math.min(job.done + 1, job.total)}/${job.total})` : ''}…`
+      : onDevice
+        ? deviceStt().text
+        : sttKey()
+          ? `ใช้ ${p.name} (${p.model}) · ส่งไฟล์เสียงไปถอดแล้วเก็บข้อความไว้ที่นี่`
+          : 'ยังไม่ได้ใส่คีย์ แตะ “ตั้งค่าบริการ”';
   $('[data-rv="transcribe"]').disabled = !!job;
-  $('[data-rv="transcribe"] span').textContent = job?.kind === 'stt' ? 'กำลังถอด…' : 'ถอดเสียง';
+  $('[data-rv="transcribe"] span').textContent = job?.kind === 'stt' ? 'กำลังถอด…' : onDevice ? 'ถอดด้วยระบบของเครื่อง' : 'ถอดเสียง';
   // Summary
   const sum = $('#rv-sum');
   $('#rv-sum-empty').hidden = !!r.summary && job?.kind !== 'claude';
@@ -2563,8 +2696,12 @@ async function audioParts(r) {
   if (r.origin === 'android' && android?.recUrl) {
     const blobs = [];
     for (let i = 0; i < r.parts; i++) {
-      const res = await fetch(android.recUrl(r.id, i));
-      if (res.ok) blobs.push(await res.blob());
+      try {
+        const res = await fetch(android.recUrl(r.id, i));
+        if (res.ok) blobs.push(await res.blob());
+      } catch {
+        // missing or unreadable part: play the rest
+      }
     }
     return blobs;
   }
@@ -2582,6 +2719,12 @@ function stopPlayer() {
 async function loadPlayer() {
   const r = findRec(rvId);
   if (!r || rvUrls.length) return;
+  if (!r.parts) {
+    // text shared in (e.g. a transcript from Samsung Voice Recorder): nothing to play
+    $('#rv-player').hidden = true;
+    $('#rv-away').hidden = true;
+    return;
+  }
   const blobs = await audioParts(r);
   if (rvId !== r.id) return;
   rvUrls = blobs.map((b) => URL.createObjectURL(b));
@@ -2675,9 +2818,13 @@ $('#rv-text').addEventListener('input', (e) => {
 async function transcribeRec(id) {
   const r = findRec(id);
   if (!r || busy.has(id)) return;
+  if (sttProvider() === 'device') {
+    transcribeOnDevice(r);
+    return;
+  }
   if (!sttKey()) {
     openClaude('', { settings: true });
-    toast('ใส่คีย์บริการถอดเสียงก่อน (Gemini หรือ OpenAI)');
+    toast('ใส่คีย์ของบริการที่เลือกก่อน หรือเปลี่ยนเป็นระบบถอดเสียงของเครื่อง');
     return;
   }
   const parts = await audioParts(r);
@@ -2710,6 +2857,58 @@ async function transcribeRec(id) {
   } finally {
     busy.delete(id);
     if (rvId === id) renderRecView();
+  }
+}
+
+/** The Android app's own speech recognition reads the saved file (no other AI). */
+async function transcribeOnDevice(r) {
+  if (!android?.recTranscribe || r.origin !== 'android') {
+    const d = deviceStt();
+    toast(
+      d.where === 'android'
+        ? 'ไฟล์นี้อัดจากหน้าเว็บ ระบบของเครื่องถอดได้เฉพาะไฟล์ที่อัดหรือแชร์เข้าแอป'
+        : d.where === 'browser'
+          ? 'บนเบราว์เซอร์ ระบบของเครื่องถอดได้ระหว่างอัดเท่านั้น ถ้าจะถอดไฟล์นี้ ใช้แอป Android หรือบริการที่ใช้คีย์'
+          : d.text,
+    );
+    return;
+  }
+  const res = android.recTranscribe(r.id);
+  if (res === 'unsupported') {
+    openClaude('', { settings: true });
+    toast(deviceStt().text);
+    return;
+  }
+  if (res === 'missing') {
+    toast('ไม่เจอไฟล์เสียงนี้ในแท็บเล็ต');
+    return;
+  }
+  busy.set(r.id, { kind: 'stt', device: true });
+  if (rvId === r.id) renderRecView();
+  try {
+    for (let i = 0; i < 60 * 60; i++) {
+      await new Promise((ok) => setTimeout(ok, 1000));
+      let m = null;
+      try {
+        m = JSON.parse(android.recList()).find((x) => x.id === r.id);
+      } catch {
+        break;
+      }
+      if (!m) break;
+      if (m.stt === 'running') {
+        // show the words as they come
+        if (rvId === r.id && m.transcript) $('#rv-stt-status').textContent = `กำลังถอด… ${V.tail(m.transcript, 120)}`;
+        continue;
+      }
+      if (m.transcript) {
+        commit(S.editRec(state, r.id, { transcript: m.transcript }));
+        toast('ถอดเป็นข้อความแล้ว');
+      } else toast(m.stt === 'unsupported' ? deviceStt().text : 'ไม่ได้ยินเสียงพูดในไฟล์นี้');
+      break;
+    }
+  } finally {
+    busy.delete(r.id);
+    if (rvId === r.id) renderRecView();
   }
 }
 
@@ -3068,8 +3267,14 @@ function syncNativeRecordings() {
   }
   let next = state;
   for (const m of list) {
-    if (next.recs.some((r) => r.id === m.id) || next.tomb?.[m.id]) continue;
-    next = S.addRec(next, { id: m.id, at: m.at, title: `บันทึกเสียง ${shortDate(dayKey(new Date(m.at)))} ${timeOf(new Date(m.at))}`, durationMs: m.durationMs, mime: m.mime, parts: m.parts, device: deviceName(), origin: 'android' });
+    const have = next.recs.find((r) => r.id === m.id);
+    if (have) {
+      if (m.transcript && !have.transcript && m.stt !== 'running' && m.stt !== 'listening') next = S.editRec(next, m.id, { transcript: m.transcript });
+      continue;
+    }
+    if (next.tomb?.[m.id]) continue;
+    const title = m.shared ? `ไฟล์เสียงที่แชร์มา ${shortDate(dayKey(new Date(m.at)))} ${timeOf(new Date(m.at))}` : `บันทึกเสียง ${shortDate(dayKey(new Date(m.at)))} ${timeOf(new Date(m.at))}`;
+    next = S.addRec(next, { id: m.id, at: m.at, title, durationMs: m.durationMs, mime: m.mime, parts: m.parts, device: deviceName(), origin: 'android', transcript: m.stt === 'running' ? '' : m.transcript || '' });
   }
   if (next !== state) commit(next);
   // Still recording (started from the tile or the side key): show it.

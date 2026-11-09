@@ -1261,3 +1261,9 @@ dialog.full[open] { animation: full-in .38s var(--ease); }
 #view-notes > * { flex-shrink: 0; }
 .row-btn { text-align: left; }
 .rec-row .mi { flex: 1; }
+
+/* live transcript under the waveform (like the phone recorder's) */
+.rec-live { width: min(720px, 100%); max-height: 5.4em; overflow: hidden; color: var(--ink); font-size: 19px; line-height: 1.6; text-align: center; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+.rec-live-partial { color: var(--dim); }
+.stt-device { display: grid; gap: 8px; margin-top: 8px; }
+.stt-device p { margin: 0; }
