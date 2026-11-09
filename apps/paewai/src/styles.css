@@ -1182,6 +1182,21 @@ dialog.full[open] { animation: full-in .38s var(--ease); }
 .player input[type="range"] { width: 100%; accent-color: var(--primary); height: 28px; }
 .speed-btn { min-width: 52px; height: 36px; padding: 0 10px; border: 0; border-radius: 18px; background: var(--sunk); font: 600 14px var(--font-num); }
 .rv-away { margin: 0; text-align: center; }
+/* bookmarks: tap to play from there */
+.rv-marks { flex: none; display: flex; gap: 8px; overflow-x: auto; padding: 2px 2px 4px; scrollbar-width: none; }
+.rv-marks:empty { display: none; }
+.rv-marks::-webkit-scrollbar { display: none; }
+.mark-chip { flex: none; display: inline-flex; align-items: center; gap: 2px; max-width: 300px; min-height: 36px; padding: 0 4px 0 12px; border: 0; border-radius: 18px; background: var(--card); color: var(--ink); box-shadow: 0 1px 2px rgb(0 0 0 / 6%); font-size: 14px; }
+.mark-go { display: inline-flex; align-items: center; gap: 6px; min-width: 0; min-height: 36px; padding: 0; border: 0; background: none; color: inherit; font: inherit; }
+.mark-chip b { font: 700 13.5px var(--font-num); font-variant-numeric: tabular-nums; color: var(--primary); }
+.mark-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dim); }
+.mark-chip .x { display: grid; place-items: center; width: 26px; height: 26px; border: 0; border-radius: 50%; background: none; color: var(--dim); font-size: 16px; line-height: 1; }
+.mark-chip.add { padding: 0 14px; background: var(--sunk); font-weight: 600; color: var(--ink); }
+.mark-chip svg, .pill-btn svg { width: 16px; height: 16px; }
+.rv-textbar { flex: none; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.pill-btn { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 0 14px; border: 0; border-radius: 18px; background: var(--tint); color: var(--primary-text); font-weight: 700; }
+.pill-btn:disabled { opacity: .45; }
+.round-btn[data-count]:not([data-count=""])::after { content: attr(data-count); position: absolute; transform: translate(18px, -18px); min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px; background: var(--primary); color: #fff; font: 700 12px/20px var(--font-num); }
 .seg { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; padding: 4px; border-radius: 16px; background: var(--sunk); }
 .seg button { min-height: 40px; border: 0; border-radius: 12px; background: none; color: var(--dim); font-weight: 600; }
 .seg button[aria-selected="true"] { background: var(--card); color: var(--ink); box-shadow: 0 1px 4px rgb(0 0 0 / 10%); }

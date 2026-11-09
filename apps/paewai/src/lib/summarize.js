@@ -148,21 +148,26 @@ export function words(text) {
   for (const s of seg.segment(text)) raw.push({ w: s.segment.toLowerCase(), word: !!s.isWordLike, start: s.index, end: s.index + s.segment.length });
   const out = [];
   for (let i = 0; i < raw.length; i++) {
-    let joined = null;
-    if (raw[i].word) {
-      for (let n = Math.min(4, raw.length - i); n >= 2 && !joined; n--) {
-        const part = raw.slice(i, i + n);
-        const w = part.map((t) => t.w).join('');
-        if (part.every((t) => t.word) && JOIN.has(w)) {
-          joined = { w, word: true, start: part[0].start, end: part.at(-1).end };
-          i += n - 1;
-        }
+    // the longest run of up to 4 words that spells a loanword in JOIN
+    let n = 0;
+    if (raw[i].word && raw[i].w.length < JOIN_LONGEST) {
+      let w = raw[i].w;
+      for (let k = 1; k < 4 && i + k < raw.length && raw[i + k].word; k++) {
+        w += raw[i + k].w;
+        if (w.length > JOIN_LONGEST) break;
+        if (JOIN.has(w)) n = k + 1;
       }
     }
-    out.push(joined ?? raw[i]);
+    if (n) {
+      const w = raw.slice(i, i + n).map((t) => t.w).join('');
+      out.push({ w, word: true, start: raw[i].start, end: raw[i + n - 1].end });
+      i += n - 1;
+    } else out.push(raw[i]);
   }
   return out;
 }
+
+const JOIN_LONGEST = Math.max(...[...JOIN].map((w) => w.length));
 
 const isContent = (w) => w.length > 1 && !STOP.has(w) && !FILLERS.has(w) && !PARTICLES.has(w) && !/^[\d,.]+$/.test(w);
 const wordsOf = (text) => words(text).filter((t) => t.word);
@@ -172,8 +177,7 @@ const contentful = (text) => wordsOf(text).filter((t) => isContent(t.w) && !KEY_
 const hasNumber = (text) => /\d/.test(text) || NUMBER.test(text);
 
 /** What a person would read: no ums, no politeness before a pause, single spaces. */
-export function clean(text) {
-  const toks = words(String(text ?? ''));
+export function clean(text, toks = words(String(text ?? ''))) {
   let out = '';
   for (let k = 0; k < toks.length; k++) {
     const t = toks[k];
@@ -189,11 +193,15 @@ export function clean(text) {
 const CLEAN_LEAD = wordSet('แล้วก็ แล้ว และ ก็คือ ก็ คือ ซึ่ง งั้น เพราะฉะนั้น ดังนั้น ฉะนั้น โอเค อ๋อ อ้อ');
 const COMPACT_LEAD = wordSet('ว่า ก็ คือ ตอนนี้ เพราะ แต่ และ ซึ่ง ส่วน');
 
+const startsWithAny = new Map();
 /** Drops leading words from `set`, word by word ("แต่ละคน" keeps its "แต่"). */
 function stripLead(text, set) {
+  let quick = startsWithAny.get(set);
+  if (!quick) startsWithAny.set(set, (quick = new RegExp(`^(?:${[...set].join('|')})`)));
+  if (!quick.test(text)) return text; // most text starts with none of them: no need to read words
   let out = text;
   for (let k = 0; k < 4; k++) {
-    const first = wordsOf(out)[0];
+    const first = wordsOf(out.slice(0, 40))[0]; // the first word (no need to read the rest)
     if (!first || !set.has(first.w) || first.end >= out.length) break;
     out = out.slice(first.end).trim();
   }
@@ -256,8 +264,22 @@ const PAUSE_BEFORE =
   /^(?:เรื่องต่อไป|ต่อไปเป็นเรื่อง|อีกเรื่อง|สุดท้ายเรื่อง|สรุปว่า|สรุปคือ|เพราะฉะนั้น|ดังนั้น|นอกจากนี้|อย่างไรก็ตาม|หลังจากนั้น|จากนั้น|การบ้าน|เอาเป็นว่า|แล้วก็|แล้วใคร|แล้วเรื่อง|ส่วนเรื่อง|แต่ว่า|แต่|เพราะ|ถ้า|อย่าลืม|ซึ่ง|ข้อดี|ข้อเสีย|แนะนำ|โดยทั่วไป|เดี๋ยว|ตกลง|งั้น|โอเค|ที่(?:แรก|สอง|สาม))/;
 const CLAUSE_WORDS = wordSet('และ หรือ โดย เช่น ก็ แล้ว ที่ ส่วน ควร ต้อง');
 
-function pauses(chunk) {
-  const toks = words(chunk);
+/** A line → phrases (what lies between pauses) with their words: [{ p, toks }]. */
+function phrasesOf(line) {
+  const out = [];
+  for (const chunk of line.split(/\s+/)) {
+    if (!chunk) continue;
+    const toks = words(chunk);
+    const text = pauses(chunk, toks);
+    const pieces = (text === chunk ? [chunk] : text.split(' ')).flatMap((x) => x.split(/(?<=[.!?…])/)).filter(Boolean);
+    if (pieces.length === 1) out.push({ p: chunk, toks });
+    else for (const p of pieces) out.push({ p, toks: words(p) });
+  }
+  return out;
+}
+
+function pauses(chunk, toks) {
+  if (chunk.length < 40) return chunk; // fewer than ~12 words
   if (toks.filter((t) => t.word).length <= 12) return chunk;
   const ends = new Set(toks.map((t) => t.end));
   let out = '';
@@ -298,12 +320,22 @@ export function sentences(input) {
   let current = [];
   let count = 0;
   let breakBefore = true;
+  // A sentence's words are its phrases' words put together (each piece of text is read once).
   const flush = () => {
-    const text = current.join(' ').trim();
+    let text = '';
+    const toks = [];
+    for (const { p, toks: pt } of current) {
+      if (text) {
+        toks.push({ w: ' ', word: false, start: text.length, end: text.length + 1 });
+        text += ' ';
+      }
+      for (const t of pt) toks.push({ ...t, start: t.start + text.length, end: t.end + text.length });
+      text += p;
+    }
     current = [];
     count = 0;
     if (text) {
-      raw.push({ text, para, newPara: breakBefore });
+      raw.push({ text, toks, para, newPara: breakBefore });
       breakBefore = false;
     }
   };
@@ -319,8 +351,8 @@ export function sentences(input) {
       breakBefore = true;
       continue;
     }
-    for (const phrase of line.split(/\s+/).map(pauses).join(' ').split(/(?<=[.!?…])\s*|\s+/).filter(Boolean)) {
-      const toks = wordsOf(phrase);
+    for (const { p: phrase, toks: all } of phrasesOf(line)) {
+      const toks = all.filter((t) => t.word);
       if (toks.length && toks.every((t) => FILLERS.has(t.w))) {
         if (count >= 4) flush(); // a pause
         continue;
@@ -328,13 +360,13 @@ export function sentences(input) {
       if (toks.length && toks.every((t) => ACK.has(t.w) || PARTICLES.has(t.w))) {
         // "ได้ครับ" after a request: its own (empty) sentence, so the request stays clean
         flush();
-        current.push(phrase);
+        current.push({ p: phrase, toks: all });
         flush();
         continue;
       }
       const clause = count >= 6 && /^\S{2,30}?(?:จะต้อง|ต้อง|ช่วย|ควร)\S/.test(phrase) && !SOFT_STARTS.test(phrase);
       if (current.length && (SENTENCE_STARTS.test(phrase) || (count >= 5 && SOFT_STARTS.test(phrase)) || clause)) flush();
-      current.push(phrase);
+      current.push({ p: phrase, toks: all });
       count += toks.length;
       const last = toks.at(-1)?.w ?? '';
       if (END_PARTICLES.has(last) || /[.!?]$/.test(phrase) || QUESTION.test(phrase) || count >= 28) flush();
@@ -348,19 +380,26 @@ export function sentences(input) {
   const kept = [];
   let carry = false;
   for (const s of raw) {
-    if (!contentCount(s.text) && !hasNumber(s.text)) {
+    const toks = s.toks;
+    const content = toks.filter((t) => t.word && isContent(t.w)).map((t) => t.w);
+    if (!content.length && !hasNumber(s.text)) {
       carry ||= s.newPara;
       continue;
     }
-    kept.push({ ...s, newPara: s.newPara || carry });
+    kept.push({ ...s, toks, content, newPara: s.newPara || carry });
     carry = false;
   }
-  const out = kept.map((s, i) => {
-    const toks = words(s.text);
-    const content = toks.filter((t) => t.word && isContent(t.w)).map((t) => t.w);
-    const c = clean(s.text);
-    return { i, text: s.text, para: s.para, newPara: s.newPara, clean: c, toks, content, set: new Set(content), isQ: false };
-  });
+  const out = kept.map((s, i) => ({
+    i,
+    text: s.text,
+    para: s.para,
+    newPara: s.newPara,
+    clean: clean(s.text, s.toks),
+    toks: s.toks,
+    content: s.content,
+    set: new Set(s.content),
+    isQ: false,
+  }));
   for (const s of out) s.isQ = isQuestion(s);
   // A question and the answer right after it
   for (let i = 0; i + 1 < out.length; i++) {
@@ -731,9 +770,14 @@ function pointText(s, sents, max, focus) {
 // ---------------------------------------------------------------------------
 // 5. Meeting-note rules
 
+const ACTION_ANY = new RegExp(`${ACTION_START.source.slice(1)}|${EVENT_START.source.slice(1)}`);
+/** Words that may carry a date or time (only then is the date reader worth running). */
+const DATEISH = /วัน|พรุ่งนี้|มะรืน|คืนนี้|เช้า|บ่าย|เย็น|ค่ำ|โมง|ทุ่ม|เที่ยง|\d|นี้|หน้า|มกรา|กุมภา|มีนา|เมษา|พฤษภา|มิถุนา|กรกฎา|สิงหา|กันยา|ตุลา|พฤศจิ|ธันวา/;
+
 function action(s, now, today) {
-  if (s.isQ || GREETING.test(s.clean)) return null;
+  if (s.isQ || GREETING.test(s.clean) || !ACTION_ANY.test(s.clean)) return null;
   const strong = STRONG.test(s.text);
+  if (!strong && !MODAL.test(s.text) && !DATEISH.test(s.clean)) return null;
   if (!strong && (SPECULATIVE.test(s.clean) || DONE.test(s.clean) || (DECISION.test(s.text) && !UNDECIDED.test(s.text)))) return null;
   const parsed = parseWhen(s.clean, now);
   const dated = !!parsed.day;
@@ -786,6 +830,7 @@ const questionText = (s) => shorten(compact(s.clean.replace(/^แล้ว\s*/, 
 /** Numbers worth remembering with the words that say what they are: "งบ… 600,000 บาท". */
 function factsOf(s, sents) {
   const out = [];
+  if (!NUMBER.test(s.clean)) return out;
   const text = compact(s.clean);
   for (const m of text.matchAll(new RegExp(NUMBER.source, 'g'))) {
     const before = text.slice(0, m.index);
@@ -894,7 +939,9 @@ export function analyze(text, { title = '', now = Date.now(), maxPoints } = {}) 
     }
   });
   open.sort((a, b) => a.i - b.i);
-  for (const s of sents) for (const f of factsOf(s, sents)) if (!facts.some((x) => x.value === f.value)) facts.push(f);
+  // numbers: only the best few dozen sentences that have one are worth reading closely
+  const withNumbers = sents.filter((s) => NUMBER.test(s.clean)).sort((a, b) => MONEY.test(b.clean) - MONEY.test(a.clean) || scores[b.i] - scores[a.i]).slice(0, 40);
+  for (const s of withNumbers) for (const f of factsOf(s, sents)) if (!facts.some((x) => x.value === f.value)) facts.push(f);
   facts.sort((a, b) => b.money - a.money || scores[b.i] - scores[a.i]);
 
   // Key sentences, not repeating the lists above

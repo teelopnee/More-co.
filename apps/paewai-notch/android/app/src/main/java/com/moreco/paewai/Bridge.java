@@ -8,8 +8,10 @@ import android.content.ClipboardManager;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.PowerManager;
 import android.provider.CalendarContract;
 import android.provider.Settings;
 import android.util.Base64;
@@ -150,13 +152,14 @@ final class Bridge {
 
     // ---- voice notes (RecorderService) ------------------------------------------
 
-    /** "ok", or "permission" when the microphone has to be allowed first (the prompt is shown). */
+    /** "ok", "permission" when the microphone has to be allowed first (the prompt is shown), "storage" when the tablet is nearly full. */
     @JavascriptInterface
     public String recStart() {
         if (activity.checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             ui.post(() -> activity.requestPermissions(new String[] {Manifest.permission.RECORD_AUDIO}, 41));
             return "permission";
         }
+        if (RecorderService.free(activity) < RecorderService.MIN_FREE_START) return "storage";
         try {
             activity.startForegroundService(RecorderService.intent(activity, RecorderService.START));
             return "ok";
@@ -180,6 +183,37 @@ final class Bridge {
         send(RecorderService.STOP);
     }
 
+    /** A bookmark at this moment of the recording. */
+    @JavascriptInterface
+    public void recMark() {
+        send(RecorderService.MARK);
+    }
+
+    /**
+     * Whether long recordings with the screen off are safe from battery saving:
+     * { ignoring: exempt from battery optimization, samsung, freeMb }.
+     */
+    @JavascriptInterface
+    public String batteryInfo() {
+        JSONObject o = new JSONObject();
+        try {
+            PowerManager pm = activity.getSystemService(PowerManager.class);
+            o.put("ignoring", pm != null && pm.isIgnoringBatteryOptimizations(activity.getPackageName()));
+            o.put("samsung", "samsung".equalsIgnoreCase(Build.MANUFACTURER));
+            o.put("freeMb", RecorderService.free(activity) >> 20);
+        } catch (Exception ignored) {
+            // JSONObject.put only throws for NaN
+        }
+        return o.toString();
+    }
+
+    /** Asks to leave แปะไว้ out of battery optimization (or opens the list when that is not possible). */
+    @JavascriptInterface
+    public boolean batterySettings() {
+        Intent ask = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:" + activity.getPackageName()));
+        return start(ask) || start(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));
+    }
+
     /** { state: idle|recording|paused, id, elapsedMs, level, stt, text (the last words), partial } */
     @JavascriptInterface
     public String recState() {
@@ -196,6 +230,8 @@ final class Bridge {
             String text = t != null ? t.fullText() : "";
             o.put("text", text.length() > 400 ? text.substring(text.length() - 400) : text);
             o.put("words", text.length());
+            o.put("marks", RecorderService.marks.size());
+            o.put("call", RecorderService.autoPaused);
         } catch (Exception ignored) {
             // JSONObject.put only throws for NaN
         }

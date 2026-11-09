@@ -280,7 +280,7 @@ export const DATA_GUIDE = `# แปะไว้ — ข้อมูล
 - \`memos\`: โน้ตย่อ \`{ id, text, pinned, createdAt, updatedAt }\`
 - \`shop\`: ของต้องซื้อ \`{ id, text, cat, done, doneAt, createdAt, updatedAt }\`
 - \`money\`: รายจ่าย \`{ id, text, amount (บาท), cat, at, updatedAt }\`
-- \`recs\`: บันทึกเสียง \`{ id, title, at, durationMs, transcript, summary, mapId, device }\` (ไฟล์เสียงอยู่ในเครื่องที่อัด ไม่อยู่ใน repo)
+- \`recs\`: บันทึกเสียง \`{ id, title, at, durationMs, transcript, summary, mapId, device, marks, times }\` (marks = จุดที่ปักหมุดเป็นมิลลิวินาที, times = [ตำแหน่งตัวอักษร, มิลลิวินาที]; ไฟล์เสียงอยู่ในเครื่องที่อัด ไม่อยู่ใน repo)
 - \`maps\`: มายด์แมป \`{ id, nodes: [{ id, parent, text }], source, createdAt, updatedAt }\` โหนดที่ \`parent: null\` คือหัวข้อกลาง
 - \`notes\`: บันทึกประจำวัน \`{ "YYYY-MM-DD": "ข้อความ" }\` และ \`notesAt\` เวลาที่แก้ล่าสุดของแต่ละวัน
 - \`focusLog\`: เวลาโฟกัสต่อวัน (มิลลิวินาที) · \`settings\`: ค่าที่ใช้ร่วมกัน เช่น \`budget\` (งบต่อเดือน)

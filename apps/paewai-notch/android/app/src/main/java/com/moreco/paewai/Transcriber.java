@@ -24,6 +24,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Speech → Thai text with the tablet's own speech recognition (the engine behind voice typing:
@@ -36,6 +37,11 @@ import java.util.concurrent.TimeUnit;
  *
  * If the engine does not read audio given to it (some engines only listen to the microphone) the
  * watchdog notices within seconds, gives up, and remembers it so recordings are never put at risk.
+ * Other engine errors restart the session; only 8 in a row (nothing heard in between) end it, so
+ * hours of recording survive the odd network or engine hiccup.
+ *
+ * Each run of words remembers where in the audio it started ({@link #times}), so the page can play
+ * the recording from a spot in the text.
  */
 @TargetApi(33)
 final class Transcriber {
@@ -48,6 +54,9 @@ final class Transcriber {
     static final String LANG = "th-TH";
     static final int RATE = 16_000;
     private static final long STALL_MS = 10_000;
+    private static final int MAX_ERRORS_IN_A_ROW = 8;
+    /** Words are reported a moment after they start: play a little earlier than the first result. */
+    private static final long LEAD_MS = 1500;
 
     private final Context ctx;
     private final boolean fromFile;
@@ -64,8 +73,17 @@ final class Transcriber {
     private volatile long writeStarted;
     private boolean onDevice;
     private boolean triedOnline;
-    private int restarts;
+    private int restarts; // engine errors in a row; any words heard reset it
     private long dropped;
+    /** Samples of our audio given to the engine (or dropped when it fell behind) = time in the audio. */
+    private final AtomicLong position = new AtomicLong();
+    private long segStart = -1; // where the words being heard now started (samples)
+    private long lastEnd; // where the last words ended
+    /** Where this audio starts in the recording (ms): the part live transcription missed starts later. */
+    final long baseMs;
+    /** Length of the audio to transcribe (ms), for progress; 0 when unknown. */
+    volatile long totalMs;
+    private final List<long[]> times = new ArrayList<>();
 
     private final StringBuilder text = new StringBuilder();
     /** The text so far, safe to read from any thread. */
@@ -75,8 +93,13 @@ final class Transcriber {
     volatile String state = "starting";
 
     Transcriber(Context c, boolean fromFile, Callback cb) {
+        this(c, fromFile, 0, cb);
+    }
+
+    Transcriber(Context c, boolean fromFile, long baseMs, Callback cb) {
         this.ctx = c.getApplicationContext();
         this.fromFile = fromFile;
+        this.baseMs = baseMs;
         this.cb = cb;
         // Live: up to 30 s of slack while the engine catches up; a file waits for the engine instead.
         this.queue = new LinkedBlockingQueue<>(fromFile ? 40 : 300);
@@ -100,7 +123,10 @@ final class Transcriber {
         if (closed || finishing) return false;
         if (!fromFile) {
             boolean ok = queue.offer(pcm);
-            if (!ok) dropped++;
+            if (!ok) {
+                dropped++;
+                position.addAndGet(pcm.length / 2); // still part of the recording's timeline
+            }
             return ok;
         }
         try {
@@ -118,6 +144,25 @@ final class Transcriber {
 
     void cancel() {
         main.post(() -> end("failed"));
+    }
+
+    /** How far into the recording the engine has heard (ms). */
+    long heardMs() {
+        return baseMs + position.get() * 1000 / RATE;
+    }
+
+    /** 0..1 for a saved file with a known length, else -1. */
+    float progress() {
+        long total = totalMs;
+        if (total <= 0) return -1;
+        return Math.max(0f, Math.min(1f, (heardMs() - baseMs) / (float) total));
+    }
+
+    /** "[[character offset, ms], …]" for the text so far. */
+    String timesJson() {
+        synchronized (times) {
+            return Times.format(times);
+        }
     }
 
     String fullText() {
@@ -181,6 +226,7 @@ final class Transcriber {
                     writeStarted = SystemClock.uptimeMillis();
                     out.write(b);
                     writeStarted = 0;
+                    position.addAndGet(b.length / 2);
                 }
             } catch (Exception ignored) {
                 // the engine closed its end (session over): the next session picks up the queue
@@ -267,10 +313,20 @@ final class Transcriber {
 
     private void add(String s) {
         if (s == null || (s = s.trim()).isEmpty()) return;
+        long start = segStart >= 0 ? segStart : lastEnd;
+        long ms = baseMs + Math.max(0, start * 1000 / RATE - LEAD_MS);
+        int offset = text.length() == 0 ? 0 : text.length() + 1;
+        synchronized (times) {
+            long last = times.isEmpty() ? 0 : times.get(times.size() - 1)[1];
+            times.add(new long[] {offset, Math.max(last, ms)});
+        }
         if (text.length() > 0) text.append(' ');
         text.append(s);
         joined = text.toString();
         partial = "";
+        segStart = -1;
+        lastEnd = position.get();
+        restarts = 0; // the engine works: count errors afresh
         cb.changed(this);
     }
 
@@ -321,6 +377,7 @@ final class Transcriber {
         public void onPartialResults(Bundle b) {
             String s = first(b);
             if (s == null) return;
+            if (partial.isEmpty()) segStart = position.get();
             partial = s;
             cb.changed(Transcriber.this);
         }
@@ -361,7 +418,7 @@ final class Transcriber {
                     break;
                 default:
                     if (finishing && (fed || queue.isEmpty())) end("done");
-                    else if (++restarts <= 8) restart(1200);
+                    else if (++restarts <= MAX_ERRORS_IN_A_ROW) restart(Math.min(10_000, 1200L * restarts));
                     else end("failed");
             }
         }
@@ -369,15 +426,17 @@ final class Transcriber {
 
     // ---- saved files ------------------------------------------------------------------
 
-    /** Transcribes saved audio files in order (any format Android can decode). */
-    static Transcriber fromFiles(Context c, List<File> files, Callback cb) {
-        Transcriber t = new Transcriber(c, true, cb);
+    /** Transcribes saved audio files in order (any format Android can decode), from `fromMs` on. */
+    static Transcriber fromFiles(Context c, List<File> files, long fromMs, long totalMs, Callback cb) {
+        Transcriber t = new Transcriber(c, true, fromMs, cb);
+        t.totalMs = Math.max(0, totalMs - fromMs);
         t.start();
         Thread decode = new Thread(() -> {
+            long[] skip = {fromMs * RATE / 1000};
             try {
                 for (File f : files) {
                     if (t.closed) break;
-                    decode(f, t);
+                    decode(f, t, skip);
                 }
             } catch (Exception ignored) {
                 // a broken file: transcribe what was decoded
@@ -389,7 +448,7 @@ final class Transcriber {
         return t;
     }
 
-    private static void decode(File f, Transcriber t) throws Exception {
+    private static void decode(File f, Transcriber t, long[] skip) throws Exception {
         MediaExtractor ex = new MediaExtractor();
         MediaCodec dec = null;
         try {
@@ -410,9 +469,11 @@ final class Transcriber {
             dec = MediaCodec.createDecoderByType(fmt.getString(MediaFormat.KEY_MIME));
             dec.configure(fmt, null, null, 0);
             dec.start();
-            Pcm.To16k resample = new Pcm.To16k(fmt.getInteger(MediaFormat.KEY_SAMPLE_RATE), fmt.getInteger(MediaFormat.KEY_CHANNEL_COUNT), chunk -> {
-                if (!t.feed(chunk)) throw new IllegalStateException("stopped");
-            });
+            Pcm.To16k.Sink sink = chunk -> {
+                byte[] rest = Pcm.skip(chunk, skip);
+                if (rest != null && !t.feed(rest)) throw new IllegalStateException("stopped");
+            };
+            Pcm.To16k resample = new Pcm.To16k(fmt.getInteger(MediaFormat.KEY_SAMPLE_RATE), fmt.getInteger(MediaFormat.KEY_CHANNEL_COUNT), sink);
             MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
             boolean inputDone = false;
             while (!t.closed) {
@@ -434,9 +495,7 @@ final class Transcriber {
                 if (out == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
                     MediaFormat of = dec.getOutputFormat();
                     resample.flush();
-                    resample = new Pcm.To16k(of.getInteger(MediaFormat.KEY_SAMPLE_RATE), of.getInteger(MediaFormat.KEY_CHANNEL_COUNT), chunk -> {
-                        if (!t.feed(chunk)) throw new IllegalStateException("stopped");
-                    });
+                    resample = new Pcm.To16k(of.getInteger(MediaFormat.KEY_SAMPLE_RATE), of.getInteger(MediaFormat.KEY_CHANNEL_COUNT), sink);
                 } else if (out >= 0) {
                     ByteBuffer b = dec.getOutputBuffer(out);
                     if (b != null && info.size > 0) {

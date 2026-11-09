@@ -498,6 +498,13 @@
         <p class="dim small">Gemini มีโควตาฟรี แต่ข้อมูลในโควตาฟรีถูกนำไปพัฒนาโมเดล · สร้างคีย์ที่ <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>
           หรือ <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">platform.openai.com/api-keys</a> · คีย์อยู่ในเครื่องนี้เท่านั้น</p>
       </div>
+      <div class="stt-device" id="rec-battery" hidden>
+        <p class="small"><strong>อัดยาว ๆ ตอนปิดจอ</strong></p>
+        <p class="dim small" id="rec-battery-status"></p>
+        <div class="sheet-buttons">
+          <button type="button" class="secondary" data-battery="ask">ให้แปะไว้ทำงานเบื้องหลังได้</button>
+        </div>
+      </div>
     </details>
   </div>
 </dialog>
@@ -541,6 +548,7 @@
         <button type="button" class="speed-btn" data-rv="speed" aria-label="ความเร็ว">1×</button>
       </div>
       <p class="dim small rv-away" id="rv-away" hidden></p>
+      <div class="rv-marks" id="rv-marks" aria-label="จุดที่ปักหมุด"></div>
       <div class="seg" role="tablist" aria-label="มุมมอง">
         <button type="button" role="tab" data-rvtab="text" aria-selected="true">ถอดความ</button>
         <button type="button" role="tab" data-rvtab="sum" aria-selected="false">สรุป</button>
@@ -554,6 +562,10 @@
             <button type="button" class="primary" data-rv="transcribe"><svg aria-hidden="true"><use href="#i-spark"/></svg><span>ถอดเสียง</span></button>
             <button type="button" class="secondary" data-rv="settings">ตั้งค่าบริการ</button>
           </div>
+        </div>
+        <div class="rv-textbar" id="rv-textbar" hidden>
+          <button type="button" class="pill-btn" data-rv="play-here"><svg aria-hidden="true"><use href="#i-play"/></svg><span>เล่นจากตรงนี้</span></button>
+          <span class="dim small" id="rv-here">แตะในข้อความ แล้วกดเล่นจากตรงนั้น</span>
         </div>
         <textarea id="rv-text" class="rv-text" rows="10" placeholder="ข้อความที่ถอดได้จะอยู่ตรงนี้ แก้ไขได้" hidden></textarea>
       </section>
@@ -614,6 +626,7 @@
   <div class="menu-list">
     <button type="button" data-rvm="share">แชร์ไฟล์เสียง</button>
     <button type="button" data-rvm="copy">คัดลอกข้อความที่ถอด</button>
+    <button type="button" data-rvm="export">ส่งออกเป็นไฟล์ข้อความ (.txt)</button>
     <button type="button" data-rvm="memo">เก็บสรุปเป็นโน้ตย่อ</button>
     <button type="button" data-rvm="delete" class="danger-text">ลบบันทึกนี้</button>
   </div>
@@ -662,7 +675,7 @@
           <strong>อัดเสียงได้ทันทีจากทุกที่</strong>
           <span>ปัดแผงด่วนลง → แก้ไข → ลากปุ่ม <em>อัดเสียง</em> เข้ามา (แตะ = เริ่ม แตะอีกครั้ง = หยุด)
             · ปุ่มด้านข้าง: การตั้งค่า → <em>ฟีเจอร์ขั้นสูง</em> → <em>ปุ่มด้านข้าง</em> → <em>กดสองครั้ง</em> → เปิดแอป → <em>อัดเสียง แปะไว้</em>
-            · อัดต่อได้แม้ปิดจอหรือใช้แอปอื่น แถบที่ notch เป็นจุดแดงพร้อมเวลา หยุดได้จากการแจ้งเตือน
+            · อัดต่อได้แม้ปิดจอหรือใช้แอปอื่น (อัดได้หลายชั่วโมง มีสายเข้าจะพักเองแล้วอัดต่อ) แถบที่ notch เป็นจุดแดงพร้อมเวลา ปักหมุดหรือหยุดได้จากการแจ้งเตือน
             · <em>ถอดเป็นข้อความไปพร้อมกัน</em> ด้วยระบบรู้จำเสียงของแท็บเล็ต (ตัวเดียวกับพิมพ์ด้วยเสียง) ไม่ใช้ AI อื่น ไม่ต้องใช้คีย์
             · อัดด้วยแอปบันทึกเสียงของ Samsung ก็ได้: แชร์ไฟล์เสียง → <em>แปะไว้ (ถอดเป็นข้อความ)</em> หรือแชร์ข้อความถอดเสียงของ Samsung มาที่แปะไว้
             · หยุดแล้วได้สรุปและมายด์แมปทันที ทำในเครื่อง ไม่ใช้ AI (โน้ต → บันทึกเสียง)</span>

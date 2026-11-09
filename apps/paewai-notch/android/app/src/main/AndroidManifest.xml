@@ -11,6 +11,13 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <!-- Transcribing a saved recording keeps going with the app closed (with its progress shown). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROCESSING" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- Hours of recording with the screen off: keep the CPU reading the microphone, and ask to be left
+         out of battery optimization (Samsung puts apps to sleep otherwise). -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <!-- Android 11+: to find the tablet's speech recognition service (Samsung's or Google's). -->
     <queries>
@@ -74,7 +81,7 @@
         <service
             android:name=".RecorderService"
             android:exported="false"
-            android:foregroundServiceType="microphone" />
+            android:foregroundServiceType="microphone|mediaProcessing|dataSync" />
 
         <service
             android:name=".RecordTile"

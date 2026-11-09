@@ -105,3 +105,19 @@ test('text-only recordings survive saving', async () => {
   s = S.sanitize(JSON.parse(JSON.stringify(s)));
   assert.deepEqual([s.recs[0].parts, s.recs[0].origin, s.recs[0].transcript], [0, 'share', 'ข้อความยาว']);
 });
+
+test('live captions remember where each run of words started', async () => {
+  const { LiveCaption } = await import('../src/lib/voice.js');
+  let now = 0;
+  const c = new LiveCaption({ clock: () => now });
+  now = 3000;
+  c.segStart = c.now(); // the first partial result of a sentence
+  now = 6000;
+  c.addFinal('สวัสดีครับ');
+  now = 20000;
+  c.addFinal('เรื่องงบโฆษณา'); // no partial seen: starts where the last one ended
+  now = 30000;
+  c.partial = 'บูธที่ห้าง';
+  assert.equal(c.stop(), 'สวัสดีครับ เรื่องงบโฆษณา บูธที่ห้าง');
+  assert.deepEqual(c.times, [[0, 1500], [11, 4500], [25, 18500]]);
+});

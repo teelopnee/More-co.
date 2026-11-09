@@ -20,6 +20,8 @@ computer and writes in Thai; reply in Thai.
     (optionally the owner's Gemini/OpenAI key; Claude takes no audio). They are summarized on the device
     with no AI (`src/lib/summarize.js`: TextRank/TextTiling + Thai meeting-note rules, tested against
     `tests/fixtures/*.txt`) into mind maps (`src/lib/mindmap.js`, `src/mapview.js`); Claude is optional.
+    Recordings keep bookmarks (`marks`, ms) and word times (`times`, [char offset, ms]); when the state
+    outgrows localStorage it moves to IndexedDB (`paewai-state`, flag key `paewai:v1:idb`).
     The font is Sarabun, shipped in `src/fonts/` (OFL).
   - `apps/paewai-notch/`: the same แปะไว้ as an Android app (Java, Gradle in `android/`) with a pill
     over the camera notch (accessibility overlay) and a drop-down panel; it bundles `../paewai/src`

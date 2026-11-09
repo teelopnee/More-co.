@@ -110,7 +110,9 @@ export function sanitize(raw) {
       parts: Number.isInteger(r.parts) && r.parts >= 0 ? Math.min(r.parts, 100) : 1, // 0: text only (shared in)
       device: typeof r.device === 'string' ? r.device.slice(0, 40) : '',
       origin: ['android', 'share'].includes(r.origin) ? r.origin : 'web',
-      transcript: typeof r.transcript === 'string' ? r.transcript.slice(0, 200_000) : '',
+      transcript: typeof r.transcript === 'string' ? r.transcript.slice(0, MAX_TRANSCRIPT) : '',
+      marks: cleanMarks(r.marks),
+      times: cleanTimes(r.times),
       summary: typeof r.summary === 'string' ? r.summary.slice(0, 20_000) : '',
       mapId: typeof r.mapId === 'string' ? r.mapId : null,
       createdAt: when(r.createdAt ?? at),
@@ -508,13 +510,61 @@ export function restoreFrom(state, backup) {
 // ---------------------------------------------------------------------------
 // Voice recordings and mind maps
 
+/** About 20 hours of speech; state that no longer fits localStorage moves to IndexedDB (app.js). */
+export const MAX_TRANSCRIPT = 1_000_000;
+
+/** Bookmarks: ms into the recording, in order. */
+export function cleanMarks(list) {
+  if (!Array.isArray(list)) return [];
+  return [...new Set(list.filter((m) => Number.isFinite(m) && m >= 0).map((m) => Math.round(m)))].sort((a, b) => a - b).slice(0, 500);
+}
+
+/** Where each run of words was said: [[character offset, ms], …], both never going back. */
+export function cleanTimes(list) {
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  for (const p of list) {
+    if (!Array.isArray(p) || !Number.isFinite(p[0]) || !Number.isFinite(p[1]) || p[0] < 0 || p[1] < 0) continue;
+    const last = out.at(-1);
+    if (last && (p[0] < last[0] || p[1] < last[1])) continue;
+    out.push([Math.round(p[0]), Math.round(p[1])]);
+    if (out.length >= 20_000) break;
+  }
+  return out;
+}
+
+/** ms into the audio where the text at `offset` was said, or -1 without times. */
+export function timeAt(times, offset) {
+  if (!times?.length) return -1;
+  let lo = 0;
+  let hi = times.length - 1;
+  if (offset < times[0][0]) return times[0][1];
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (times[mid][0] <= offset) lo = mid;
+    else hi = mid - 1;
+  }
+  return times[lo][1];
+}
+
+/** Character offset of what was being said at `ms`, or -1 without times. */
+export function offsetAt(times, ms) {
+  if (!times?.length) return -1;
+  let best = times[0][0];
+  for (const [c, t] of times) {
+    if (t > ms) break;
+    best = c;
+  }
+  return best;
+}
+
 export function addRec(state, rec, now = Date.now()) {
-  const r = { title: 'บันทึกเสียง', durationMs: 0, mime: '', parts: 1, device: '', origin: 'web', transcript: '', summary: '', mapId: null, ...rec };
+  const r = { title: 'บันทึกเสียง', durationMs: 0, mime: '', parts: 1, device: '', origin: 'web', transcript: '', summary: '', mapId: null, marks: [], times: [], ...rec };
   return { ...state, recs: [...state.recs, { ...r, id: r.id ?? uid(now), at: r.at ?? now, createdAt: now, updatedAt: now }] };
 }
 
 export function editRec(state, id, changes, now = Date.now()) {
-  const allowed = ['title', 'transcript', 'summary', 'mapId', 'durationMs', 'parts'];
+  const allowed = ['title', 'transcript', 'summary', 'mapId', 'durationMs', 'parts', 'marks', 'times'];
   return {
     ...state,
     recs: state.recs.map((r) => {

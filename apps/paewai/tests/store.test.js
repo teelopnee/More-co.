@@ -284,3 +284,25 @@ test('restore from a backup adds back what is missing and keeps the rest', () =>
   assert.equal(state.notes['2026-11-01'], 'บันทึกใหม่');
   assert.equal(S.restoreFrom(state, state).added, 0);
 });
+
+test('recordings keep bookmarks and where each run of words was said', () => {
+  const now = new Date(2026, 10, 9, 10).getTime();
+  let st = S.addRec(S.emptyState(), { id: 'r1', title: 'ประชุม', transcript: 'สวัสดี งบโฆษณา บูธ', marks: [5000, 1200, 5000, -1, 'x'], times: [[0, 0], [7, 4000], [3, 9000], [16, 9000]] }, now);
+  st = S.sanitize(JSON.parse(JSON.stringify(st)));
+  const r = st.recs[0];
+  assert.deepEqual(r.marks, [1200, 5000], 'sorted, no repeats, no junk');
+  assert.deepEqual(r.times, [[0, 0], [7, 4000], [16, 9000]], 'never goes back');
+  assert.equal(S.timeAt(r.times, 0), 0);
+  assert.equal(S.timeAt(r.times, 10), 4000);
+  assert.equal(S.timeAt(r.times, 99), 9000);
+  assert.equal(S.timeAt([], 5), -1);
+  assert.equal(S.offsetAt(r.times, 5000), 7);
+  assert.equal(S.offsetAt(r.times, 100), 0);
+  assert.equal(S.offsetAt(undefined, 100), -1);
+  const edited = S.editRec(st, 'r1', { marks: [42] }, now + 1);
+  assert.deepEqual(edited.recs[0].marks, [42]);
+  // hours of text are kept (about 20 hours of speech)
+  const long = 'ก'.repeat(S.MAX_TRANSCRIPT + 10);
+  assert.equal(S.sanitize({ ...S.emptyState(), recs: [{ id: 'r2', transcript: long }] }).recs[0].transcript.length, S.MAX_TRANSCRIPT);
+  assert.ok(S.MAX_TRANSCRIPT >= 1_000_000);
+});

@@ -34,6 +34,47 @@ document.documentElement.classList.toggle('ios', ios);
 // ---------------------------------------------------------------------------
 // State
 
+// Hours of transcripts outgrow localStorage (about 5 MB): the state then lives in IndexedDB, and
+// localStorage only keeps the version number, so every window knows to read it from there.
+const OVERFLOW_KEY = `${S.STORAGE_KEY}:idb`;
+const overflowAtStart = readOverflowVersion();
+let overflow = !!overflowAtStart; // saving to IndexedDB
+let overflowVer = ''; // the IndexedDB version this window has
+let storageReady = !overflow; // false until the IndexedDB copy is read: nothing is saved before
+let lastLoaded = null;
+let refreshing = null;
+let writing = null;
+let pendingJson = null;
+
+function readOverflowVersion() {
+  try {
+    return localStorage.getItem(`${S.STORAGE_KEY}:idb`) || '';
+  } catch {
+    return '';
+  }
+}
+
+const stateDb = (() => {
+  let db = null;
+  const open = () =>
+    (db ??= new Promise((ok, no) => {
+      const r = indexedDB.open('paewai-state', 1);
+      r.onupgradeneeded = () => r.result.createObjectStore('kv');
+      r.onsuccess = () => ok(r.result);
+      r.onerror = () => no(r.error);
+    }));
+  const run = async (mode, fn) => {
+    const d = await open();
+    return new Promise((ok, no) => {
+      const t = d.transaction('kv', mode);
+      const req = fn(t.objectStore('kv'));
+      t.oncomplete = () => ok(req?.result);
+      t.onerror = t.onabort = () => no(t.error);
+    });
+  };
+  return { get: () => run('readonly', (st) => st.get('state')), put: (json) => run('readwrite', (st) => st.put(json, 'state')) };
+})();
+
 let state = load();
 let undoState = null;
 let today = dayKey(new Date());
@@ -45,21 +86,87 @@ let engaged = false; // the person tapped or typed in the composer since it got 
 let installPrompt = null;
 
 function load() {
+  const ver = readOverflowVersion();
+  if (ver) {
+    // In IndexedDB (asynchronous): keep what this window has, and read the newer copy.
+    overflow = true;
+    if (ver !== overflowVer) refreshOverflow(ver);
+    return lastLoaded ?? S.emptyState();
+  }
   try {
     const raw = localStorage.getItem(S.STORAGE_KEY);
-    if (raw) return S.sanitize(JSON.parse(raw)) ?? S.emptyState();
+    if (raw) return (lastLoaded = S.sanitize(JSON.parse(raw)) ?? S.emptyState());
   } catch {
     // unreadable storage: start empty
   }
-  return S.emptyState();
+  return (lastLoaded = S.emptyState());
+}
+
+function refreshOverflow(ver) {
+  refreshing ??= (async () => {
+    try {
+      const json = await stateDb.get();
+      const next = json ? S.sanitize(JSON.parse(json)) : null;
+      overflowVer = ver;
+      if (next) {
+        state = lastLoaded = next;
+        if (typeof render === 'function' && storageReady) {
+          render();
+          syncNote();
+        }
+      }
+    } catch {
+      toast('อ่านข้อมูลในเครื่องไม่ได้ ลองปิดแล้วเปิดใหม่');
+    } finally {
+      refreshing = null;
+      if (!storageReady) {
+        storageReady = true;
+        render();
+        syncNote();
+      }
+    }
+  })();
+  return refreshing;
+}
+
+function writeOverflow(json) {
+  pendingJson = json;
+  if (writing) return;
+  writing = (async () => {
+    while (pendingJson) {
+      const next = pendingJson;
+      pendingJson = null;
+      const ver = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+      try {
+        await stateDb.put(next);
+        overflowVer = ver;
+        try {
+          localStorage.removeItem(S.STORAGE_KEY); // free the room it took
+          localStorage.setItem(OVERFLOW_KEY, ver); // other windows: read it again
+        } catch {
+          // the version tells other windows; this one has it already
+        }
+      } catch {
+        toast('บันทึกไม่ได้ ที่เก็บข้อมูลในเครื่องเต็มหรือถูกปิดไว้');
+      }
+    }
+    writing = null;
+  })();
 }
 
 function save({ sync = true } = {}) {
-  try {
-    localStorage.setItem(S.STORAGE_KEY, JSON.stringify(state));
-  } catch {
-    toast('บันทึกไม่ได้ ที่เก็บข้อมูลในเครื่องเต็มหรือถูกปิดไว้');
+  if (!storageReady) return; // the IndexedDB copy is not read yet: do not write over it
+  const json = JSON.stringify(state);
+  lastLoaded = state;
+  if (!overflow) {
+    try {
+      localStorage.setItem(S.STORAGE_KEY, json);
+    } catch {
+      // full (hours of transcripts): move to IndexedDB, which has room for much more
+      overflow = true;
+    }
   }
+  if (overflow) writeOverflow(json);
   syncAndroid();
   if (sync) scheduleSync();
 }
@@ -1637,7 +1744,11 @@ window.addEventListener('storage', (e) => {
     renderSyncStatus();
     return;
   }
-  if (e.key !== S.STORAGE_KEY) return;
+  if (e.key === OVERFLOW_KEY && e.newValue) {
+    refreshOverflow(e.newValue);
+    return;
+  }
+  if (e.key !== S.STORAGE_KEY || overflow) return;
   state = load();
   render();
   syncNote();
@@ -2223,6 +2334,7 @@ function deviceStt() {
 }
 
 function renderSttSettings() {
+  renderBattery();
   const device = sttProvider() === 'device';
   $('#stt-device').hidden = !device;
   $('#stt-keys').hidden = device;
@@ -2232,6 +2344,34 @@ function renderSttSettings() {
   $('[data-stt="download"]').hidden = !d.download;
   $('[data-stt="retry"]').hidden = !d.retry;
 }
+
+/** Android app: is แปะไว้ safe from battery saving for hours of recording, and how much room is left. */
+function renderBattery() {
+  const box = $('#rec-battery');
+  let b = null;
+  try {
+    b = android?.batteryInfo ? JSON.parse(android.batteryInfo()) : null;
+  } catch {
+    b = null;
+  }
+  box.hidden = !b;
+  if (!b) return;
+  const hours = Math.floor((b.freeMb || 0) / 22);
+  const room = b.freeMb ? ` · ที่ว่าง ${b.freeMb >= 1024 ? `${(b.freeMb / 1024).toFixed(1)} GB` : `${b.freeMb} MB`} อัดได้อีกราว ${hours.toLocaleString('th-TH')} ชั่วโมง` : '';
+  const samsung = b.samsung ? ' ใน Samsung เพิ่มแปะไว้ในรายการแอปที่ไม่ต้องสลีปด้วย: การตั้งค่า → แบตเตอรี่ → ขีดจำกัดการใช้งานเบื้องหลัง (Background usage limits) → Never sleeping apps' : '';
+  $('#rec-battery-status').textContent = b.ignoring
+    ? `แปะไว้ได้รับยกเว้นจากการประหยัดแบตแล้ว อัดต่อได้แม้ปิดจอนาน ๆ${room}${samsung ? ` ·${samsung}` : ''}`
+    : `ระบบประหยัดแบตอาจหยุดแปะไว้เมื่อปิดจอนาน ๆ แตะปุ่มด้านล่างแล้วเลือก “อนุญาต”${room}${samsung ? ` ·${samsung}` : ''}`;
+  $('[data-battery="ask"]').hidden = !!b.ignoring;
+}
+
+$('#rec-battery').addEventListener('click', (e) => {
+  if (e.target.closest('[data-battery="ask"]')) {
+    if (!android?.batterySettings?.()) toast('เปิดหน้าตั้งค่าแบตเตอรี่ไม่ได้');
+    setTimeout(renderBattery, 1500);
+  }
+});
+document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && !$('#rec-battery').hidden && renderBattery());
 
 $('#stt-device').addEventListener('click', (e) => {
   const act = e.target.closest('[data-stt]')?.dataset.stt;
@@ -2315,6 +2455,19 @@ class NativeRecorder {
   get level() {
     return Math.sqrt(this.last.level || 0);
   }
+  get markCount() {
+    return this.last.marks || 0;
+  }
+  get call() {
+    return !!this.last.call;
+  }
+  mark() {
+    if (!android.recMark) return -1;
+    android.recMark();
+    const ms = this.durationMs;
+    this.last = { ...this.last, marks: (this.last.marks || 0) + 1 };
+    return ms;
+  }
   pause() {
     android.recPause();
   }
@@ -2348,10 +2501,10 @@ function showNativeRecorder() {
   cancelAnimationFrame(recRaf);
   const loop = () => {
     if (!recorder?.native) return;
-    const before = recorder.state;
+    const before = `${recorder.state}${recorder.markCount}${recorder.call}`;
     recorder.poll();
     recLevel = recorder.level;
-    if (recorder.state !== before) renderRecState();
+    if (`${recorder.state}${recorder.markCount}${recorder.call}` !== before) renderRecState();
     renderLive(recorder.text, '');
     // Stopped from the notification, the tile or the side key: save it like the stop button.
     if (recorder.state === 'stopped') {
@@ -2382,6 +2535,10 @@ async function startRecording() {
         toast('อนุญาตไมโครโฟน แล้วแตะอัดเสียงอีกครั้ง');
         return;
       }
+      if (res === 'storage') {
+        toast('พื้นที่ในแท็บเล็ตเหลือไม่ถึง 50 MB ลบไฟล์ที่ไม่ใช้แล้วลองอีกครั้ง');
+        return;
+      }
       if (res !== 'ok') {
         toast('เริ่มอัดเสียงไม่ได้');
         return;
@@ -2394,6 +2551,13 @@ async function startRecording() {
   if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
     toast('เบราว์เซอร์นี้อัดเสียงไม่ได้ ลองเปิดใน Chrome หรือ Safari');
     return;
+  }
+  // ~30 MB an hour: warn when the browser has little room left for this site
+  try {
+    const est = await navigator.storage?.estimate?.();
+    if (est?.quota && est.quota - est.usage < 100 * 2 ** 20) toast('ที่เก็บของเบราว์เซอร์เหลือน้อย อัดได้ไม่นาน ลบบันทึกเสียงเก่าที่ไม่ใช้แล้วจะดีกว่า');
+  } catch {
+    // unknown: record anyway
   }
   const rec = new V.Recorder({
     id: S.uid(),
@@ -2409,6 +2573,7 @@ async function startRecording() {
       renderLive('', '');
     },
   });
+  Object.defineProperty(rec, 'markCount', { get: () => rec.marks.length });
   recorder = rec;
   recBars = [];
   caption = null;
@@ -2420,7 +2585,7 @@ async function startRecording() {
     await rec.start();
     navigator.storage?.persist?.().catch(() => {});
     if (sttProvider() === 'device' && V.LiveCaption.supported && !captionBlocked) {
-      caption = new V.LiveCaption({ onchange: (c) => renderLive(c.text, c.partial) });
+      caption = new V.LiveCaption({ onchange: (c) => renderLive(c.text, c.partial), clock: () => rec.durationMs });
       caption.start();
     }
   } catch (err) {
@@ -2463,6 +2628,12 @@ function renderRecState() {
   pause.innerHTML = icon(st === 'paused' ? 'i-mic' : 'i-pause');
   pause.setAttribute('aria-label', st === 'paused' ? 'อัดต่อ' : 'พัก');
   pause.disabled = st !== 'recording' && st !== 'paused';
+  const mark = $('[data-rec="mark"]');
+  mark.hidden = st !== 'recording' && st !== 'paused';
+  const n = recorder?.markCount ?? 0;
+  mark.dataset.count = n ? String(n) : '';
+  mark.setAttribute('aria-label', n ? `ปักหมุดช่วงนี้ (ปักไว้ ${n} จุด)` : 'ปักหมุดช่วงนี้');
+  if (recorder?.call) $('#rec-badge span').textContent = 'พักไว้ระหว่างสาย';
 }
 
 function drawRec() {
@@ -2505,6 +2676,7 @@ async function stopRecording() {
   if (!rec) return;
   cancelAnimationFrame(recRaf);
   const words = caption ? caption.stop() : '';
+  const wordTimes = caption?.times ?? [];
   caption = null;
   const res = await rec.stop();
   recorder = null;
@@ -2523,9 +2695,12 @@ async function stopRecording() {
   }
   const title = `บันทึกเสียง ${shortDate(dayKey(new Date(res.at)))} ${timeOf(new Date(res.at))}`;
   const transcript = (origin === 'android' ? res.transcript : words) || '';
-  commit(withSummary(S.addRec(state, { id: res.id, title, at: res.at, durationMs: res.durationMs, mime: res.mime, parts: res.parts, device: deviceName(), origin, transcript }), res.id));
+  const times = S.cleanTimes(origin === 'android' ? res.times : wordTimes);
+  const marks = S.cleanMarks(res.marks);
+  commit(withSummary(S.addRec(state, { id: res.id, title, at: res.at, durationMs: res.durationMs, mime: res.mime, parts: res.parts, device: deviceName(), origin, transcript, times, marks }), res.id));
   openRec(res.id);
   if (origin === 'android' && res.stt === 'listening') waitNativeText(res.id);
+  else if (origin === 'android' && (res.appending || res.stt === 'running')) followNative(res.id);
   else if (!transcript && (sttKey() || (sttProvider() === 'device' && origin === 'android'))) transcribeRec(res.id);
 }
 
@@ -2544,13 +2719,64 @@ async function waitNativeText(id) {
       }
       if (!m) break;
       if (m.stt === 'listening' || m.stt === 'running') continue;
-      if (m.transcript && findRec(id)) commit(withSummary(S.editRec(state, id, { transcript: m.transcript }), id));
+      if (m.transcript && findRec(id)) commit(withSummary(S.editRec(state, id, { transcript: m.transcript, times: S.cleanTimes(m.times) }), id));
+      if (m.appending || m.stt === 'running') {
+        busy.delete(id);
+        followNative(id);
+        return;
+      }
+      break;
+    }
+  } finally {
+    if (!busy.get(id)?.follow) busy.delete(id);
+    if (rvId === id) renderRecView();
+  }
+}
+
+/**
+ * The Android app is transcribing a saved recording (or the part live transcription missed): show
+ * its progress for as long as it takes, and take the text when it is done. Works again after the
+ * page reloads (openRec calls it for a job that is running).
+ */
+async function followNative(id) {
+  if (!android?.recList || busy.get(id)?.follow) return;
+  busy.set(id, { kind: 'stt', device: true, follow: true });
+  if (rvId === id) renderRecView();
+  try {
+    for (;;) {
+      await new Promise((ok) => setTimeout(ok, 1000));
+      let m = null;
+      try {
+        m = JSON.parse(android.recList()).find((x) => x.id === id);
+      } catch {
+        break;
+      }
+      if (!m || !findRec(id)) break;
+      if (m.stt === 'running') {
+        busy.set(id, { kind: 'stt', device: true, follow: true, progress: m.progress, text: m.appending ? '' : m.transcript });
+        if (rvId === id) renderSttProgress(id);
+        continue;
+      }
+      const r = findRec(id);
+      if (m.transcript && m.transcript !== r.transcript) {
+        // a longer text (the missed part added) makes a new summary
+        const grown = !r.transcript || m.transcript.startsWith(r.transcript);
+        commit(withSummary(S.editRec(state, id, { transcript: m.transcript, times: S.cleanTimes(m.times) }), id, { force: grown }));
+        toast(m.transcript.length > (r.transcript?.length ?? 0) && r.transcript ? 'ถอดช่วงที่ขาดเพิ่มให้แล้ว' : 'ถอดเป็นข้อความและสรุปแล้ว');
+      } else if (!m.transcript) toast(m.stt === 'unsupported' ? deviceStt().text : 'ไม่ได้ยินเสียงพูดในไฟล์นี้');
       break;
     }
   } finally {
     busy.delete(id);
     if (rvId === id) renderRecView();
   }
+}
+
+function renderSttProgress(id) {
+  const job = busy.get(id);
+  if (!job) return;
+  const pct = Number.isFinite(job.progress) && job.progress >= 0 ? ` ${Math.round(job.progress * 100)}%` : '';
+  $('#rv-stt-status').textContent = `กำลังถอดด้วยระบบของเครื่อง…${pct}${job.text ? ` ${V.tail(job.text, 100)}` : ''} · ปิดแอปได้ ทำต่อให้เอง`;
 }
 
 recDialog.addEventListener('cancel', (e) => {
@@ -2569,6 +2795,12 @@ recDialog.addEventListener('click', async (e) => {
   if (act === 'stop') {
     buzz(15);
     await stopRecording();
+  }
+  if (act === 'mark' && recorder) {
+    const ms = recorder.mark();
+    buzz(10);
+    renderRecState();
+    if (ms >= 0) toast(`ปักหมุดที่ ${V.clock(ms)}`);
   }
   if (act === 'cancel') {
     const button = e.target.closest('[data-rec]');
@@ -2618,6 +2850,14 @@ function openRec(id, tab = 'text') {
   rvTab(tab);
   if (!recview.open) recview.showModal();
   renderRecView();
+  if (android?.recList && findRec(id).origin === 'android' && !busy.has(id)) {
+    try {
+      const m = JSON.parse(android.recList()).find((x) => x.id === id);
+      if (m && (m.stt === 'running' || m.appending)) followNative(id);
+    } catch {
+      // older app
+    }
+  }
   loadPlayer().catch(() => {
     $('#rv-player').hidden = true;
   });
@@ -2658,8 +2898,11 @@ function renderRecView() {
         : sttKey()
           ? `ใช้ ${p.name} (${p.model}) · ส่งไฟล์เสียงไปถอดแล้วเก็บข้อความไว้ที่นี่`
           : 'ยังไม่ได้ใส่คีย์ แตะ “ตั้งค่าบริการ”';
+  if (job?.follow) renderSttProgress(r.id);
   $('[data-rv="transcribe"]').disabled = !!job;
   $('[data-rv="transcribe"] span').textContent = job?.kind === 'stt' ? 'กำลังถอด…' : onDevice ? 'ถอดด้วยระบบของเครื่อง' : 'ถอดเสียง';
+  renderMarks(r);
+  renderTextBar();
   // Summary
   const sum = $('#rv-sum');
   $('#rv-sum-empty').hidden = !!r.summary && job?.kind !== 'claude';
@@ -2747,6 +2990,8 @@ async function loadPlayer() {
   $('#rv-away').hidden = !!rvUrls.length;
   $('#rv-away').textContent = r.device && r.device !== deviceName() ? `ไฟล์เสียงอยู่ใน ${r.device} (ข้อความ สรุป และมายด์แมปซิงก์มาให้แล้ว)` : 'ไม่มีไฟล์เสียงในเครื่องนี้';
   if (rvUrls.length) setPart(0, 0);
+  renderMarks(r);
+  renderTextBar();
 }
 
 const partLen = (r, i) => (i < r.parts - 1 ? V.PART_MS : Math.max(0, (r.durationMs || 0) - V.PART_MS * (r.parts - 1)));
@@ -2798,19 +3043,54 @@ player.addEventListener('ended', () => {
     player.play().catch(() => {});
   } else updatePlayer();
 });
-$('#rv-seek').addEventListener('input', (e) => {
+/** Plays (or moves to) `ms` into the whole recording, across its files. */
+function seekTo(ms, play = true) {
   const r = findRec(rvId);
   if (!r || !rvUrls.length) return;
-  let target = (Number(e.target.value) / 1000) * totalMs();
+  let target = Math.max(0, Math.min(ms, totalMs() || ms));
   let i = 0;
   while (i < rvUrls.length - 1 && target > partLen(r, i)) target -= partLen(r, i++);
-  const playing = !player.paused;
-  if (i !== rvPart) {
-    setPart(i, target);
-    if (playing) player.play().catch(() => {});
-  } else player.currentTime = target / 1000;
+  if (i !== rvPart) setPart(i, target);
+  else player.currentTime = target / 1000;
+  if (play) player.play().catch(() => {});
   updatePlayer();
-});
+}
+
+$('#rv-seek').addEventListener('input', (e) => seekTo((Number(e.target.value) / 1000) * totalMs(), !player.paused));
+
+// Bookmarks (as in Samsung's and Google's recorders): tap one to play from there.
+function renderMarks(r) {
+  const box = $('#rv-marks');
+  const chips = (r.marks ?? []).map((ms, i) => {
+    const at = S.offsetAt(r.times, ms);
+    const words = at >= 0 && r.transcript ? Sum.shorten(r.transcript.slice(at, at + 200), 34, { keepStart: true }) : '';
+    return `<span class="mark-chip"><button type="button" class="mark-go" data-mark="${i}" aria-label="เล่นจาก ${V.clock(ms)}"><svg aria-hidden="true"><use href="#i-pin"/></svg><b>${V.clock(ms)}</b>${words ? `<span>${esc(words)}</span>` : ''}</button><button type="button" class="x" data-unmark="${i}" aria-label="เอาหมุด ${V.clock(ms)} ออก">×</button></span>`;
+  });
+  if (rvUrls.length && r.parts) chips.push(`<button type="button" class="mark-chip add" data-rv="add-mark"><svg aria-hidden="true"><use href="#i-pin"/></svg>ปักหมุดตรงนี้</button>`);
+  const html = chips.join('');
+  if (box.innerHTML !== html) box.innerHTML = html;
+}
+
+/** Where the text cursor is, in the audio: from the word times, else in proportion. */
+function hereMs(r) {
+  const text = $('#rv-text');
+  const at = text.selectionStart ?? 0;
+  const ms = S.timeAt(r.times, at);
+  if (ms >= 0) return { ms, exact: true };
+  const len = text.value.length || 1;
+  return { ms: Math.round((at / len) * totalMs()), exact: false };
+}
+
+function renderTextBar() {
+  const r = findRec(rvId);
+  const bar = $('#rv-textbar');
+  bar.hidden = !r?.transcript || !rvUrls.length;
+  if (bar.hidden) return;
+  const focused = document.activeElement === $('#rv-text') || $('#rv-text').selectionStart > 0;
+  const { ms, exact } = hereMs(r);
+  $('#rv-here').textContent = focused ? `${exact ? '' : 'ประมาณ '}${V.clock(ms)}` : 'แตะในข้อความ แล้วกดเล่นจากตรงนั้น';
+}
+for (const ev of ['click', 'keyup', 'select', 'focus']) $('#rv-text').addEventListener(ev, () => renderTextBar());
 
 recview.addEventListener('close', () => {
   player.pause();
@@ -2898,33 +3178,7 @@ async function transcribeOnDevice(r) {
     toast('ไม่เจอไฟล์เสียงนี้ในแท็บเล็ต');
     return;
   }
-  busy.set(r.id, { kind: 'stt', device: true });
-  if (rvId === r.id) renderRecView();
-  try {
-    for (let i = 0; i < 60 * 60; i++) {
-      await new Promise((ok) => setTimeout(ok, 1000));
-      let m = null;
-      try {
-        m = JSON.parse(android.recList()).find((x) => x.id === r.id);
-      } catch {
-        break;
-      }
-      if (!m) break;
-      if (m.stt === 'running') {
-        // show the words as they come
-        if (rvId === r.id && m.transcript) $('#rv-stt-status').textContent = `กำลังถอด… ${V.tail(m.transcript, 120)}`;
-        continue;
-      }
-      if (m.transcript) {
-        commit(withSummary(S.editRec(state, r.id, { transcript: m.transcript }), r.id));
-        toast('ถอดเป็นข้อความและสรุปแล้ว');
-      } else toast(m.stt === 'unsupported' ? deviceStt().text : 'ไม่ได้ยินเสียงพูดในไฟล์นี้');
-      break;
-    }
-  } finally {
-    busy.delete(r.id);
-    if (rvId === r.id) renderRecView();
-  }
+  followNative(r.id);
 }
 
 /** Claude: summary, things to do and a mind map from a transcript. */
@@ -3017,7 +3271,46 @@ function withSummary(st, id, { force = false } = {}) {
   pendingItems.set(id, a.items);
   if (rvId === id) rvItems = a.items;
   const retitle = AUTO_REC_TITLE.test(r.title) && a.named;
-  return S.editRec(st, id, { summary: a.summary, ...(retitle ? { title: a.title } : {}) });
+  const pins = markLines(r);
+  const summary = pins.length ? `${a.summary}\n**ช่วงที่ปักหมุด**\n${pins.map((l) => `- ${l}`).join('\n')}` : a.summary;
+  return S.editRec(st, id, { summary, ...(retitle ? { title: a.title } : {}) });
+}
+
+/** "1:23 · what was being said" for each bookmark. */
+function markLines(r, max = 40) {
+  return (r.marks ?? []).slice(0, 12).map((ms) => {
+    const at = S.offsetAt(r.times, ms);
+    const words = at >= 0 && r.transcript ? Sum.shorten(r.transcript.slice(at, at + 240), max, { keepStart: true }) : '';
+    return words ? `${V.clock(ms)} · ${words}` : V.clock(ms);
+  });
+}
+
+/** The recording as a text file: summary, bookmarks, and the transcript with times. */
+function recText(r) {
+  const head = [r.title, `${longDate(dayKey(new Date(r.at)))} · ${timeOf(new Date(r.at))} น.${r.durationMs ? ` · ${V.clock(r.durationMs)}` : ''}`, ''];
+  const plain = (t) => t.replace(/\*\*(.+?)\*\*/g, '$1');
+  const out = [...head];
+  if (r.summary) out.push('สรุป', plain(r.summary), '');
+  const pins = markLines(r, 60);
+  if (pins.length && !r.summary?.includes('ช่วงที่ปักหมุด')) out.push('ช่วงที่ปักหมุด', ...pins.map((l) => `- ${l}`), '');
+  if (r.transcript) {
+    out.push('ข้อความที่ถอด');
+    const times = r.times ?? [];
+    if (times.length) {
+      // a paragraph about every half minute, each with the time it starts
+      let para = null;
+      times.forEach(([at, ms], i) => {
+        const piece = r.transcript.slice(at, times[i + 1]?.[0] ?? r.transcript.length).trim();
+        if (!piece) return;
+        if (!para || ms - para.ms >= 30_000 || para.text.length > 400) {
+          if (para) out.push(`[${V.clock(para.ms)}] ${para.text}`, '');
+          para = { ms, text: piece };
+        } else para.text += ` ${piece}`;
+      });
+      if (para) out.push(`[${V.clock(para.ms)}] ${para.text}`);
+    } else out.push(r.transcript);
+  }
+  return `${out.join('\n').trim()}\n\nจาก แปะไว้\n`;
 }
 
 /** The on-device mind map for a recording, replacing the one it had (same id, so links stay). */
@@ -3026,7 +3319,13 @@ function withMap(st, id) {
   const a = r?.transcript?.trim() && analyzeLocal(r);
   if (!a) return st;
   const old = st.maps.find((m) => m.id === r.mapId);
-  const fresh = Sum.toMindMap(a, Date.now());
+  let fresh = Sum.toMindMap(a, Date.now());
+  const pins = markLines(r, 36);
+  if (pins.length) {
+    let branch = Mm.addChild(fresh, Mm.rootOf(fresh).id, 'ช่วงที่ปักหมุด');
+    fresh = branch.map;
+    for (const l of pins.slice(0, 8)) fresh = Mm.addChild(fresh, branch.id, `📍 ${l}`).map;
+  }
   const map = { ...fresh, id: old?.id ?? fresh.id, source: { kind: 'rec', id }, createdAt: old?.createdAt ?? fresh.createdAt };
   return S.editRec(S.saveMap(st, map), id, { mapId: map.id });
 }
@@ -3038,9 +3337,30 @@ recview.addEventListener('click', async (e) => {
     rvTab(tab);
     return;
   }
-  const act = e.target.closest('[data-rv]')?.dataset.rv;
   const r = findRec(rvId);
+  const go = e.target.closest('[data-mark]')?.dataset.mark;
+  if (go != null && r) {
+    seekTo(r.marks[Number(go)] ?? 0);
+    return;
+  }
+  const drop = e.target.closest('[data-unmark]')?.dataset.unmark;
+  if (drop != null && r) {
+    commit(S.editRec(state, r.id, { marks: r.marks.filter((_, i) => i !== Number(drop)) }), { undoable: true });
+    toast('เอาหมุดออกแล้ว', { label: 'เลิกทำ', run: undo });
+    return;
+  }
+  const act = e.target.closest('[data-rv]')?.dataset.rv;
   if (!act || !r) return;
+  if (act === 'add-mark') {
+    const ms = Math.round(positionMs());
+    commit(S.editRec(state, r.id, { marks: S.cleanMarks([...(r.marks ?? []), ms]) }));
+    toast(`ปักหมุดที่ ${V.clock(ms)}`);
+    return;
+  }
+  if (act === 'play-here') {
+    seekTo(hereMs(r).ms);
+    return;
+  }
   if (act === 'play') {
     if (!rvUrls.length) return;
     if (player.paused) player.play().catch(() => toast('เล่นไฟล์นี้ไม่ได้'));
@@ -3113,6 +3433,7 @@ recview.addEventListener('click', async (e) => {
     const menuEl = $('#rv-menu');
     menuEl.querySelector('[data-rvm="share"]').hidden = !rvUrls.length;
     menuEl.querySelector('[data-rvm="copy"]').hidden = !r.transcript;
+    menuEl.querySelector('[data-rvm="export"]').hidden = !r.transcript && !r.summary;
     menuEl.querySelector('[data-rvm="memo"]').hidden = !r.summary;
     menuEl.showModal();
   }
@@ -3145,6 +3466,7 @@ $('#rv-menu').addEventListener('click', async (e) => {
   }
   $('#rv-menu').close();
   if (act === 'copy') copyText(r.transcript);
+  if (act === 'export') shareFile(`${r.title.replace(/[\\/:*?"<>|]/g, ' ').slice(0, 60)}.txt`, recText(r), 'text/plain');
   if (act === 'memo') {
     commit(S.addMemo(state, `${r.title}\n${r.summary}`), { undoable: true });
     toast('เก็บสรุปเป็นโน้ตย่อแล้ว', { label: 'เลิกทำ', run: undo });
@@ -3359,12 +3681,16 @@ function syncNativeRecordings() {
   for (const m of list) {
     const have = next.recs.find((r) => r.id === m.id);
     if (have) {
-      if (m.transcript && !have.transcript && m.stt !== 'running' && m.stt !== 'listening') next = withSummary(S.editRec(next, m.id, { transcript: m.transcript }), m.id);
+      const settled = m.stt !== 'running' && m.stt !== 'listening' && !m.appending;
+      if (settled && m.transcript && m.transcript !== have.transcript && (!have.transcript || m.transcript.startsWith(have.transcript)))
+        next = withSummary(S.editRec(next, m.id, { transcript: m.transcript, times: S.cleanTimes(m.times) }), m.id, { force: !!have.transcript });
+      if (Array.isArray(m.marks) && m.marks.length && !have.marks?.length) next = S.editRec(next, m.id, { marks: S.cleanMarks(m.marks) });
       continue;
     }
     if (next.tomb?.[m.id]) continue;
     const title = m.shared ? `ไฟล์เสียงที่แชร์มา ${shortDate(dayKey(new Date(m.at)))} ${timeOf(new Date(m.at))}` : `บันทึกเสียง ${shortDate(dayKey(new Date(m.at)))} ${timeOf(new Date(m.at))}`;
-    next = withSummary(S.addRec(next, { id: m.id, at: m.at, title, durationMs: m.durationMs, mime: m.mime, parts: m.parts, device: deviceName(), origin: 'android', transcript: m.stt === 'running' ? '' : m.transcript || '' }), m.id);
+    const text = m.stt === 'running' && !m.appending ? '' : m.transcript || '';
+    next = withSummary(S.addRec(next, { id: m.id, at: m.at, title, durationMs: m.durationMs, mime: m.mime, parts: m.parts, device: deviceName(), origin: 'android', transcript: text, times: text ? S.cleanTimes(m.times) : [], marks: S.cleanMarks(m.marks) }), m.id);
   }
   if (next !== state) commit(next);
   // Still recording (started from the tile or the side key): show it.

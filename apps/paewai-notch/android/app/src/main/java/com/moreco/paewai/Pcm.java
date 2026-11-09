@@ -24,6 +24,23 @@ final class Pcm {
         return true;
     }
 
+    /**
+     * Drops the first `remaining[0]` samples of a stream given chunk by chunk (to start transcribing
+     * where live transcription stopped). Returns what is left of this chunk, or null when all of it
+     * is skipped.
+     */
+    static byte[] skip(byte[] chunk, long[] remaining) {
+        if (remaining[0] <= 0) return chunk;
+        long samples = chunk.length / 2;
+        if (samples <= remaining[0]) {
+            remaining[0] -= samples;
+            return null;
+        }
+        int from = (int) (remaining[0] * 2);
+        remaining[0] = 0;
+        return java.util.Arrays.copyOfRange(chunk, from, chunk.length);
+    }
+
     /** ADTS header for one AAC-LC frame, so the .aac file plays (and survives a crash) without a container. */
     static byte[] adtsHeader(int frameLength, int sampleRate, int channels) {
         int len = frameLength + 7;

@@ -152,6 +152,15 @@ export class Recorder {
     this.runStart = 0;
     this.saving = Promise.resolve();
     this.format = pickFormat();
+    this.marks = []; // bookmarks: ms into the recording
+  }
+
+  /** A bookmark at this moment (Samsung/Google recorders: come back to it later). */
+  mark() {
+    if (this.state !== 'recording' && this.state !== 'paused') return -1;
+    const ms = this.durationMs;
+    this.marks.push(ms);
+    return ms;
   }
 
   get durationMs() {
@@ -252,7 +261,7 @@ export class Recorder {
       await audio.sealPart(this.id, this.part, this.format.mime);
       await audio.dropMeta(this.id);
       if (reason) this.onerror(reason);
-      return { id: this.id, at: this.at, durationMs: duration, mime: this.format.mime, parts: this.part + 1 };
+      return { id: this.id, at: this.at, durationMs: duration, mime: this.format.mime, parts: this.part + 1, marks: [...this.marks] };
     })();
     return this.stopping;
   }
@@ -447,10 +456,14 @@ export class LiveCaption {
     return !!SR;
   }
 
-  constructor({ onchange = () => {}, lang = 'th-TH' } = {}) {
-    Object.assign(this, { onchange, lang });
+  /** `clock()`: ms into the recording now, so each run of words knows where it was said. */
+  constructor({ onchange = () => {}, lang = 'th-TH', clock = null } = {}) {
+    Object.assign(this, { onchange, lang, clock });
     this.text = '';
     this.partial = '';
+    this.times = []; // [character offset, ms]
+    this.segStart = -1;
+    this.lastEnd = 0;
     this.active = false;
     this.failures = 0;
     this.state = 'off';
@@ -475,9 +488,10 @@ export class LiveCaption {
         const res = e.results[i];
         const t = res[0]?.transcript?.trim() ?? '';
         if (!t) continue;
-        if (res.isFinal) this.text = this.text ? `${this.text} ${t}` : t;
+        if (res.isFinal) this.addFinal(t);
         else partial += (partial ? ' ' : '') + t;
       }
+      if (partial && !this.partial && this.segStart < 0) this.segStart = this.now();
       this.partial = partial;
       this.failures = 0;
       this.onchange(this);
@@ -491,7 +505,7 @@ export class LiveCaption {
     };
     r.onend = () => {
       if (this.partial) {
-        this.text = this.text ? `${this.text} ${this.partial}` : this.partial;
+        this.addFinal(this.partial);
         this.partial = '';
         this.onchange(this);
       }
@@ -511,6 +525,22 @@ export class LiveCaption {
     }
   }
 
+  now() {
+    return this.clock ? Math.max(0, Math.round(this.clock())) : 0;
+  }
+
+  /** Words heard for good: remember where they started (a moment before they were reported). */
+  addFinal(t) {
+    const start = this.segStart >= 0 ? this.segStart : this.lastEnd;
+    if (this.clock) {
+      const ms = Math.max(this.times.at(-1)?.[1] ?? 0, start - 1500, 0);
+      this.times.push([this.text ? this.text.length + 1 : 0, ms]);
+    }
+    this.text = this.text ? `${this.text} ${t}` : t;
+    this.segStart = -1;
+    this.lastEnd = this.now();
+  }
+
   /** Ends and returns the text. */
   stop() {
     this.active = false;
@@ -520,10 +550,9 @@ export class LiveCaption {
     } catch {
       // already stopped
     }
-    const all = this.partial ? `${this.text} ${this.partial}`.trim() : this.text;
-    this.text = all;
+    if (this.partial) this.addFinal(this.partial);
     this.partial = '';
-    return all;
+    return this.text;
   }
 }
 
