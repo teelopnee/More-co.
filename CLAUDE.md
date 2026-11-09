@@ -16,8 +16,10 @@ computer and writes in Thai; reply in Thai.
     `src/lib/github.js`; token stored per device, never in the data or this repo). "ถาม Claude" uses
     the bundled official SDK in `src/vendor/anthropic.js` with the owner's own key, or opens claude.ai.
     `src/vendor/` holds pre-bundled third-party code; regenerate it as the app README says.
-    Voice notes (`src/lib/voice.js`, IndexedDB) are transcribed with the owner's Gemini/OpenAI key
-    (Claude takes no audio) and summarized into mind maps (`src/lib/mindmap.js`, `src/mapview.js`).
+    Voice notes (`src/lib/voice.js`, IndexedDB) are transcribed by the device's own speech recognition
+    (optionally the owner's Gemini/OpenAI key; Claude takes no audio). They are summarized on the device
+    with no AI (`src/lib/summarize.js`: TextRank/TextTiling + Thai meeting-note rules, tested against
+    `tests/fixtures/*.txt`) into mind maps (`src/lib/mindmap.js`, `src/mapview.js`); Claude is optional.
     The font is Sarabun, shipped in `src/fonts/` (OFL).
   - `apps/paewai-notch/`: the same แปะไว้ as an Android app (Java, Gradle in `android/`) with a pill
     over the camera notch (accessibility overlay) and a drop-down panel; it bundles `../paewai/src`

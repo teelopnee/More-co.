@@ -9,6 +9,7 @@ import { GitHubRepo, explain } from './lib/github.js';
 import * as C from './lib/claude.js';
 import * as V from './lib/voice.js';
 import * as Mm from './lib/mindmap.js';
+import * as Sum from './lib/summarize.js';
 import { MapView } from './mapview.js';
 
 const VERSION = 'dev';
@@ -434,12 +435,14 @@ function capture(text, { shared = false } = {}) {
   if (shared && V.looksLikeTranscript(text)) {
     // A transcript (Samsung Voice Recorder's "share text") or long notes: keep it whole, ready for a summary.
     const now = Date.now();
+    // a heading line names it; a speaker label ("ผู้พูด 1 (00:00)") does not, the summary will
     const first = text.trim().split(/\n/)[0].replace(/^#+\s*/, '').trim();
-    const title = first.length > 4 && first.length <= 60 ? first : `ข้อความที่แชร์มา ${shortDate(dayKey(new Date(now)))} ${timeOf(new Date(now))}`;
+    const label = /^(?:ผู้พูด|speaker|ผู้บรรยาย)?\s*\d*\s*\(?\d{1,2}:\d{2}/i.test(first) || /^(?:ผู้พูด|speaker)\s*\d+\s*:?$/i.test(first);
+    const title = !label && first.length > 4 && first.length <= 60 ? first : `ข้อความที่แชร์มา ${shortDate(dayKey(new Date(now)))} ${timeOf(new Date(now))}`;
     const id = S.uid(now);
-    commit(S.addRec(state, { id, at: now, title, parts: 0, durationMs: 0, origin: 'share', transcript: text.trim(), device: deviceName() }), { undoable: true });
-    setTimeout(() => openRec(id, 'text'), 50);
-    return { kind: 'rec', msg: 'เก็บเป็นบันทึกแล้ว แตะ “สรุป” เพื่อทำมายด์แมป' };
+    commit(withSummary(S.addRec(state, { id, at: now, title, parts: 0, durationMs: 0, origin: 'share', transcript: text.trim(), device: deviceName() }), id), { undoable: true });
+    setTimeout(() => openRec(id, 'sum'), 50);
+    return { kind: 'rec', msg: 'เก็บเป็นบันทึกพร้อมสรุปแล้ว' };
   }
   const r = shared ? classify(text, Date.now()) : captureSort(text);
   if (r.kind === 'money' && !r.amount) return { error: 'ใส่จำนวนเงินด้วย เช่น “ข้าวมันไก่ 50”' };
@@ -954,6 +957,7 @@ function openItem(kind, id) {
   $('[data-iact="pin"]', itemForm).hidden = kind !== 'memo';
   $('[data-iact="pin"] span', itemForm).textContent = item.pinned ? 'เลิกปักหมุด' : 'ปักหมุด';
   $('[data-iact="to-task"]', itemForm).hidden = kind === 'money';
+  $('[data-iact="to-map"]', itemForm).hidden = kind !== 'memo' || item.text.trim().length < 40;
   $('[data-iact="link"]', itemForm).hidden = !URL_RE.test(item.text);
   itemDialog.showModal();
 }
@@ -1001,6 +1005,11 @@ itemForm.addEventListener('click', async (e) => {
     } catch {
       toast('คัดลอกไม่ได้');
     }
+  }
+  if (act === 'to-map') {
+    saveItem();
+    itemDialog.close();
+    memoToMap(id);
   }
   if (act === 'to-task') {
     const text = itemForm.text.value.trim();
@@ -2160,7 +2169,8 @@ $('#claude-q').addEventListener('keydown', (e) => {
 claudeDialog.addEventListener('close', () => asking?.abort());
 
 // ---------------------------------------------------------------------------
-// Voice notes (lib/voice.js): record → transcribe → Claude summary and mind map
+// Voice notes (lib/voice.js): record → transcribe → summary and mind map, made on the device
+// (lib/summarize.js, no AI) or by Claude when asked
 
 const readLocal = (key, fallback) => {
   try {
@@ -2513,7 +2523,7 @@ async function stopRecording() {
   }
   const title = `บันทึกเสียง ${shortDate(dayKey(new Date(res.at)))} ${timeOf(new Date(res.at))}`;
   const transcript = (origin === 'android' ? res.transcript : words) || '';
-  commit(S.addRec(state, { id: res.id, title, at: res.at, durationMs: res.durationMs, mime: res.mime, parts: res.parts, device: deviceName(), origin, transcript }));
+  commit(withSummary(S.addRec(state, { id: res.id, title, at: res.at, durationMs: res.durationMs, mime: res.mime, parts: res.parts, device: deviceName(), origin, transcript }), res.id));
   openRec(res.id);
   if (origin === 'android' && res.stt === 'listening') waitNativeText(res.id);
   else if (!transcript && (sttKey() || (sttProvider() === 'device' && origin === 'android'))) transcribeRec(res.id);
@@ -2534,7 +2544,7 @@ async function waitNativeText(id) {
       }
       if (!m) break;
       if (m.stt === 'listening' || m.stt === 'running') continue;
-      if (m.transcript && findRec(id)) commit(S.editRec(state, id, { transcript: m.transcript }));
+      if (m.transcript && findRec(id)) commit(withSummary(S.editRec(state, id, { transcript: m.transcript }), id));
       break;
     }
   } finally {
@@ -2592,6 +2602,7 @@ let rvTabName = 'text';
 let rvUrls = [];
 let rvPart = 0;
 let rvItems = [];
+const pendingItems = new Map(); // rec id → things to do found by the last summary, until they are added
 let rvMapView = null;
 const busy = new Map(); // rec id → 'stt' | 'claude' (+ progress)
 
@@ -2600,7 +2611,7 @@ const findRec = (id) => state.recs.find((r) => r.id === id);
 function openRec(id, tab = 'text') {
   if (!findRec(id)) return;
   if (rvId !== id) {
-    rvItems = [];
+    rvItems = pendingItems.get(id) ?? [];
     stopPlayer();
   }
   rvId = id;
@@ -2614,6 +2625,8 @@ function openRec(id, tab = 'text') {
 
 function rvTab(name) {
   rvTabName = name;
+  const r = findRec(rvId);
+  if (name === 'map' && r?.transcript?.trim() && !state.maps.some((m) => m.id === r.mapId)) commit(withMap(state, r.id));
   for (const b of $$('[data-rvtab]')) b.setAttribute('aria-selected', String(b.dataset.rvtab === name));
   for (const p of $$('.rv-pane')) p.hidden = p.dataset.pane !== name;
   if (name === 'map') renderRvMap();
@@ -2651,7 +2664,8 @@ function renderRecView() {
   const sum = $('#rv-sum');
   $('#rv-sum-empty').hidden = !!r.summary && job?.kind !== 'claude';
   $('[data-rv="analyze"]').disabled = !!job;
-  $('[data-rv="analyze"] span').textContent = job?.kind === 'claude' ? 'Claude กำลังสรุป…' : r.summary ? 'สรุปใหม่' : 'สรุปด้วย Claude';
+  $('[data-rv="local"]').disabled = !!job || !hasText;
+  $('[data-rv="analyze"] span').textContent = job?.kind === 'claude' ? 'Claude กำลังสรุป…' : 'สรุปด้วย Claude';
   sum.hidden = !r.summary;
   if (r.summary) {
     const now = Date.now();
@@ -2663,12 +2677,13 @@ function renderRecView() {
     sum.innerHTML =
       `<div class="answer">${miniMarkdown(r.summary)}</div>` +
       (rows.length ? `<div class="suggest"><p class="suggest-title">สิ่งที่ต้องทำจากบันทึกนี้</p><ul>${rows.join('')}</ul><button type="button" class="primary" data-rv="add-items">แปะที่เลือก</button></div>` : '') +
-      `<div class="sheet-buttons"><button type="button" class="secondary" data-rv="analyze-again">สรุปใหม่</button><button type="button" class="secondary" data-rv="copy-sum">คัดลอก</button></div>`;
+      `<div class="sheet-buttons"><button type="button" class="secondary" data-rv="analyze-again">สรุปใหม่</button><button type="button" class="secondary" data-rv="copy-sum">คัดลอก</button><button type="button" class="secondary" data-rv="analyze">ให้ Claude สรุป</button></div>`;
   }
   // Mind map
   const map = state.maps.find((m) => m.id === r.mapId);
-  $('#rv-map-label').textContent = map ? 'เปิดมายด์แมป' : 'ให้ Claude ทำมายด์แมป';
-  $('[data-rv="outline-map"]').hidden = !!map || !(r.summary || r.transcript);
+  $('#rv-map-label').textContent = map ? 'เปิดมายด์แมป' : 'ทำมายด์แมป';
+  $('[data-rv="open-map"]').disabled = !map && !hasText;
+  $('[data-rv="outline-map"]').hidden = !map || !hasText;
   if (rvTabName === 'map') renderRvMap();
 }
 
@@ -2680,7 +2695,7 @@ function renderRvMap() {
   if (!map) {
     rvMapView?.destroy();
     rvMapView = null;
-    host.innerHTML = `<p class="dim">${r?.transcript ? 'ยังไม่มีมายด์แมป ให้ Claude ทำจากข้อความที่ถอดได้ หรือทำจากสรุป' : 'ถอดเสียงก่อน แล้วค่อยทำมายด์แมป'}</p>`;
+    host.innerHTML = `<p class="dim">${r?.transcript ? 'แตะ “ทำมายด์แมป” เพื่อทำจากข้อความที่ถอดได้' : 'ถอดเสียงก่อน แล้วค่อยทำมายด์แมป'}</p>`;
     return;
   }
   if (!rvMapView) {
@@ -2850,8 +2865,8 @@ async function transcribeRec(id) {
       toast('ไม่ได้ยินเสียงพูดในไฟล์นี้');
       return;
     }
-    commit(S.editRec(state, id, { transcript: text }));
-    toast('ถอดเสียงแล้ว');
+    commit(withSummary(S.editRec(state, id, { transcript: text }), id));
+    toast('ถอดเสียงและสรุปแล้ว');
   } catch (err) {
     toast(err?.message || 'ถอดเสียงไม่สำเร็จ');
   } finally {
@@ -2901,8 +2916,8 @@ async function transcribeOnDevice(r) {
         continue;
       }
       if (m.transcript) {
-        commit(S.editRec(state, r.id, { transcript: m.transcript }));
-        toast('ถอดเป็นข้อความแล้ว');
+        commit(withSummary(S.editRec(state, r.id, { transcript: m.transcript }), r.id));
+        toast('ถอดเป็นข้อความและสรุปแล้ว');
       } else toast(m.stt === 'unsupported' ? deviceStt().text : 'ไม่ได้ยินเสียงพูดในไฟล์นี้');
       break;
     }
@@ -2941,9 +2956,11 @@ async function analyzeRec(id) {
       next = S.saveMap(next, map);
       mapId = map.id;
     }
-    const autoTitle = /^บันทึกเสียง /.test(cur.title) && note.title;
+    // a title the person did not write (the default, or the one the on-device summary gave) can change
+    const autoTitle = (AUTO_REC_TITLE.test(cur.title) || cur.title === analyzeLocal(cur)?.title) && note.title;
     next = S.editRec(next, id, { summary: note.summary, mapId, ...(autoTitle ? { title: note.title } : {}) });
     rvItems = note.items;
+    pendingItems.set(id, note.items);
     commit(next);
     toast(note.note || 'สรุปแล้ว พร้อมมายด์แมป');
   } catch (err) {
@@ -2976,11 +2993,42 @@ function openClaudeWeb(prompt, done) {
   toast(done ?? (link === C.CLAUDE_WEB ? 'คัดลอกคำถามแล้ว วางในแชตของ Claude ได้เลย' : 'เปิด Claude แล้ว (คัดลอกคำถามไว้ให้ด้วย)'));
 }
 
-/** A map from the summary (or the transcript) without AI: each line or sentence becomes a branch. */
-function outlineMapFor(r) {
-  const title = r.title.replace(/^บันทึกเสียง\s*/, '') || 'บันทึกเสียง';
-  const source = r.summary || r.transcript.split(/(?<=[.!?…])\s+|\n+/).filter((l) => l.trim().length > 3).slice(0, 12).map((l) => `- ${l.trim().slice(0, 80)}`).join('\n');
-  return { ...Mm.fromOutline(source, title), source: { kind: 'rec', id: r.id } };
+const AUTO_REC_TITLE = /^(?:บันทึกเสียง|ไฟล์เสียงที่แชร์มา|ข้อความที่แชร์มา)\s/;
+
+/** Reads a recording's text on the device (lib/summarize.js): topics, decisions, tasks, open questions. */
+function analyzeLocal(r) {
+  try {
+    return Sum.analyze(r.transcript, { title: r.title, now: r.at });
+  } catch (err) {
+    console.error(err);
+    return null;
+  }
+}
+
+/**
+ * The on-device summary for a recording that has text and no summary yet (`force`: make it again).
+ * Pure apart from remembering the things to do it found for the open recording.
+ */
+function withSummary(st, id, { force = false } = {}) {
+  const r = st.recs.find((x) => x.id === id);
+  if (!r?.transcript?.trim() || (r.summary && !force)) return st;
+  const a = analyzeLocal(r);
+  if (!a) return st;
+  pendingItems.set(id, a.items);
+  if (rvId === id) rvItems = a.items;
+  const retitle = AUTO_REC_TITLE.test(r.title) && a.named;
+  return S.editRec(st, id, { summary: a.summary, ...(retitle ? { title: a.title } : {}) });
+}
+
+/** The on-device mind map for a recording, replacing the one it had (same id, so links stay). */
+function withMap(st, id) {
+  const r = st.recs.find((x) => x.id === id);
+  const a = r?.transcript?.trim() && analyzeLocal(r);
+  if (!a) return st;
+  const old = st.maps.find((m) => m.id === r.mapId);
+  const fresh = Sum.toMindMap(a, Date.now());
+  const map = { ...fresh, id: old?.id ?? fresh.id, source: { kind: 'rec', id }, createdAt: old?.createdAt ?? fresh.createdAt };
+  return S.editRec(S.saveMap(st, map), id, { mapId: map.id });
 }
 
 let rvDeleteArmed = 0;
@@ -3007,7 +3055,22 @@ recview.addEventListener('click', async (e) => {
   }
   if (act === 'transcribe') transcribeRec(r.id);
   if (act === 'settings') openClaude('', { settings: true });
-  if (act === 'analyze' || act === 'analyze-again') analyzeRec(r.id);
+  if (act === 'analyze') analyzeRec(r.id);
+  if (act === 'local' || act === 'analyze-again') {
+    if (!r.transcript?.trim()) {
+      toast('ถอดเสียงก่อน แล้วค่อยสรุป');
+      rvTab('text');
+      return;
+    }
+    const next = withSummary(state, r.id, { force: true });
+    if (next === state) {
+      toast('ข้อความสั้นเกินไปที่จะสรุป');
+      return;
+    }
+    // the mind map stays as it is (it may have been edited): มายด์แมป → ทำใหม่จากข้อความ remakes it
+    commit(next, { undoable: true });
+    toast('สรุปแล้ว', { label: 'เลิกทำ', run: undo });
+  }
   if (act === 'web') {
     if (!r.transcript) {
       toast('ถอดเสียงก่อน แล้วค่อยส่งให้ Claude');
@@ -3029,18 +3092,22 @@ recview.addEventListener('click', async (e) => {
     }
     if (!n) return;
     rvItems = [];
+    pendingItems.delete(r.id);
     commit(next, { undoable: true });
     toast(`แปะ ${n} เรื่องจากบันทึกนี้แล้ว`, { label: 'เลิกทำ', run: undo });
   }
   if (act === 'open-map') {
-    const map = state.maps.find((m) => m.id === r.mapId);
+    let map = state.maps.find((m) => m.id === r.mapId);
+    if (!map && r.transcript?.trim()) {
+      commit(withMap(state, r.id));
+      map = state.maps.find((m) => m.id === findRec(r.id).mapId);
+    }
     if (map) openMap(map.id);
-    else analyzeRec(r.id);
+    else toast('ถอดเสียงก่อน แล้วค่อยทำมายด์แมป');
   }
   if (act === 'outline-map') {
-    const map = outlineMapFor(r);
-    commit(S.editRec(S.saveMap(state, map), r.id, { mapId: map.id }));
-    openMap(map.id);
+    commit(withMap(state, r.id), { undoable: true });
+    toast('ทำมายด์แมปใหม่จากข้อความแล้ว', { label: 'เลิกทำ', run: undo });
   }
   if (act === 'more') {
     const menuEl = $('#rv-menu');
@@ -3136,6 +3203,29 @@ function renderMapTools(sel) {
   $('[data-mm="delete"]').disabled = !node || root;
   $('[data-mm="fold"]').disabled = !node || !Mm.childrenOf(mapView.map, node.id).length;
   $('[data-mm="fold"] span').textContent = node?.collapsed ? 'กาง' : 'พับ';
+}
+
+/** A memo as a mind map: a list stays a list, plain text is read like a recording (no AI). */
+function memoToMap(id) {
+  const memo = state.memos.find((m) => m.id === id);
+  if (!memo) return;
+  const text = memo.text.trim();
+  const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
+  const BULLET = /^(?:[-*+•]|\d{1,3}[.)]|#{1,6})\s/;
+  const head = lines.length > 1 && lines[0].length <= 60 && !BULLET.test(lines[0]) ? lines[0] : '';
+  let map;
+  if (lines.filter((l) => BULLET.test(l)).length >= 2) map = Mm.fromOutline(text, head || 'โน้ตย่อ');
+  else {
+    const a = Sum.analyze(head ? lines.slice(1).join('\n') : text, { title: head || 'โน้ตย่อ', now: memo.updatedAt ?? Date.now() });
+    if (!a) {
+      toast('ข้อความสั้นเกินไปที่จะทำมายด์แมป');
+      return;
+    }
+    map = Sum.toMindMap(a, Date.now());
+  }
+  map = { ...map, source: { kind: 'memo', id } };
+  commit(S.saveMap(state, map), { undoable: true });
+  openMap(map.id);
 }
 
 function newMindMap(title = 'หัวข้อหลัก', outline = '') {
@@ -3269,12 +3359,12 @@ function syncNativeRecordings() {
   for (const m of list) {
     const have = next.recs.find((r) => r.id === m.id);
     if (have) {
-      if (m.transcript && !have.transcript && m.stt !== 'running' && m.stt !== 'listening') next = S.editRec(next, m.id, { transcript: m.transcript });
+      if (m.transcript && !have.transcript && m.stt !== 'running' && m.stt !== 'listening') next = withSummary(S.editRec(next, m.id, { transcript: m.transcript }), m.id);
       continue;
     }
     if (next.tomb?.[m.id]) continue;
     const title = m.shared ? `ไฟล์เสียงที่แชร์มา ${shortDate(dayKey(new Date(m.at)))} ${timeOf(new Date(m.at))}` : `บันทึกเสียง ${shortDate(dayKey(new Date(m.at)))} ${timeOf(new Date(m.at))}`;
-    next = S.addRec(next, { id: m.id, at: m.at, title, durationMs: m.durationMs, mime: m.mime, parts: m.parts, device: deviceName(), origin: 'android', transcript: m.stt === 'running' ? '' : m.transcript || '' });
+    next = withSummary(S.addRec(next, { id: m.id, at: m.at, title, durationMs: m.durationMs, mime: m.mime, parts: m.parts, device: deviceName(), origin: 'android', transcript: m.stt === 'running' ? '' : m.transcript || '' }), m.id);
   }
   if (next !== state) commit(next);
   // Still recording (started from the tile or the side key): show it.

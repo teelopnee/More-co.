@@ -316,6 +316,7 @@
       <button type="button" data-iact="pin"><svg aria-hidden="true"><use href="#i-pin"/></svg><span>ปักหมุด</span></button>
       <button type="button" data-iact="link" hidden><svg aria-hidden="true"><use href="#i-link"/></svg><span>เปิดลิงก์</span></button>
       <button type="button" data-iact="to-task"><svg aria-hidden="true"><use href="#i-tasks"/></svg><span>ย้ายไปเป็นงาน</span></button>
+      <button type="button" data-iact="to-map" hidden><svg aria-hidden="true"><use href="#i-map"/></svg><span>ทำมายด์แมป</span></button>
       <button type="button" data-iact="copy"><svg aria-hidden="true"><use href="#i-copy"/></svg><span>คัดลอก</span></button>
       <button type="button" data-iact="delete" class="danger"><svg aria-hidden="true"><use href="#i-trash"/></svg><span>ลบ</span></button>
     </div>
@@ -558,10 +559,11 @@
       </section>
       <section class="rv-pane" data-pane="sum" hidden>
         <div class="ai-card" id="rv-sum-empty">
-          <p><strong>ให้ Claude สรุปและทำมายด์แมป</strong></p>
-          <p class="dim small">ใช้ข้อความที่ถอดได้ ได้ทั้งสรุปประเด็น สิ่งที่ต้องทำ และมายด์แมปในครั้งเดียว</p>
+          <p><strong>สรุปและทำมายด์แมป</strong></p>
+          <p class="dim small">สรุปในเครื่อง ไม่ใช้ AI และไม่ส่งข้อความไปที่ไหน: แยกหัวข้อที่คุย ข้อสรุป สิ่งที่ต้องทำพร้อมวันเวลาและคนรับผิดชอบ เรื่องที่ยังค้าง และตัวเลขสำคัญ</p>
           <div class="sheet-buttons">
-            <button type="button" class="primary" data-rv="analyze"><svg aria-hidden="true"><use href="#i-spark"/></svg><span>สรุปด้วย Claude</span></button>
+            <button type="button" class="primary" data-rv="local"><svg aria-hidden="true"><use href="#i-map"/></svg><span>สรุปในเครื่อง</span></button>
+            <button type="button" class="secondary" data-rv="analyze"><span>สรุปด้วย Claude</span></button>
             <button type="button" class="secondary" data-rv="web">เปิดใน Claude</button>
           </div>
         </div>
@@ -571,7 +573,7 @@
         <div class="map-preview" id="rv-map"></div>
         <div class="sheet-buttons">
           <button type="button" class="primary" data-rv="open-map"><svg aria-hidden="true"><use href="#i-map"/></svg><span id="rv-map-label">เปิดมายด์แมป</span></button>
-          <button type="button" class="secondary" data-rv="outline-map">ทำจากสรุป (ไม่ใช้ AI)</button>
+          <button type="button" class="secondary" data-rv="outline-map">ทำใหม่จากข้อความ</button>
         </div>
       </section>
     </div>
@@ -663,7 +665,7 @@
             · อัดต่อได้แม้ปิดจอหรือใช้แอปอื่น แถบที่ notch เป็นจุดแดงพร้อมเวลา หยุดได้จากการแจ้งเตือน
             · <em>ถอดเป็นข้อความไปพร้อมกัน</em> ด้วยระบบรู้จำเสียงของแท็บเล็ต (ตัวเดียวกับพิมพ์ด้วยเสียง) ไม่ใช้ AI อื่น ไม่ต้องใช้คีย์
             · อัดด้วยแอปบันทึกเสียงของ Samsung ก็ได้: แชร์ไฟล์เสียง → <em>แปะไว้ (ถอดเป็นข้อความ)</em> หรือแชร์ข้อความถอดเสียงของ Samsung มาที่แปะไว้
-            · เสร็จแล้วอยู่ใน โน้ต → บันทึกเสียง สรุปและทำมายด์แมปต่อได้</span>
+            · หยุดแล้วได้สรุปและมายด์แมปทันที ทำในเครื่อง ไม่ใช้ AI (โน้ต → บันทึกเสียง)</span>
         </li>
       </ol>
       <div class="group">

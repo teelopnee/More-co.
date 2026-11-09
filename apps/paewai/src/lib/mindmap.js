@@ -196,13 +196,28 @@ const segmenter = typeof Intl !== 'undefined' && Intl.Segmenter ? new Intl.Segme
 
 /** Wraps text into lines no wider than `max`, breaking between Thai words (or anywhere for long words). */
 export function wrapText(text, max, measure) {
-  const pieces = segmenter ? [...segmenter.segment(text)].map((s) => s.segment) : text.split(/(\s+)/);
+  const raw = segmenter ? [...segmenter.segment(text)].map((s) => s.segment) : text.split(/(\s+)/);
+  // "15–17", "20%", "ธ.ค.", "3×3", "14:00" stay on one line
+  const pieces = [];
+  for (const p of raw) {
+    const prev = pieces.at(-1);
+    const glue = prev !== undefined && !/\s$/.test(prev) && !/^\s/.test(p) && (/^[–\-.,:;%)\]×/]/.test(p) || /[–\-(\[×/.:]$/.test(prev) || (/^\d/.test(p) && /\d$/.test(prev)));
+    if (glue) pieces[pieces.length - 1] = prev + p;
+    else pieces.push(p);
+  }
   const lines = [];
   let line = '';
   for (const piece of pieces) {
     const next = line + piece;
     if (!line || measure(next) <= max) {
       line = next;
+      continue;
+    }
+    // a pause near the end of the line is a better place to break than between two words
+    const sp = line.lastIndexOf(' ');
+    if (sp > 0 && sp >= line.length * 0.55 && measure(line.slice(sp + 1) + piece) <= max) {
+      lines.push(line.slice(0, sp).trimEnd());
+      line = line.slice(sp + 1) + piece;
       continue;
     }
     lines.push(line.trimEnd());
