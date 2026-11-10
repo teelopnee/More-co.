@@ -51,6 +51,7 @@ final class WebHost {
                 if (!HOST.equals(url.getHost())) return null;
                 String path = url.getPath();
                 if (path != null && path.startsWith("/rec/")) return recording(activity, path);
+                if (path != null && path.startsWith("/shared/")) return shared(activity, path);
                 return asset(activity, path);
             }
 
@@ -115,6 +116,20 @@ final class WebHost {
             headers.put("Cache-Control", "no-store");
             headers.put("Content-Length", String.valueOf(f.length()));
             r.setResponseHeaders(headers);
+            return r;
+        } catch (IOException e) {
+            return notFound();
+        }
+    }
+
+    /** /shared/<name> → a picture another app shared (MainActivity copies it to the cache). */
+    private static WebResourceResponse shared(Activity a, String path) {
+        String name = path.substring("/shared/".length());
+        if (!name.matches("[a-z0-9]{3,40}")) return notFound();
+        java.io.File f = new java.io.File(new java.io.File(a.getCacheDir(), "shared"), name);
+        try {
+            WebResourceResponse r = new WebResourceResponse("application/octet-stream", null, new java.io.FileInputStream(f));
+            r.setResponseHeaders(Collections.singletonMap("Cache-Control", "no-store"));
             return r;
         } catch (IOException e) {
             return notFound();

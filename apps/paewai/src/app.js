@@ -5,11 +5,13 @@ import * as S from './lib/store.js';
 import { MONEY_CATS, classify, findAmount, pastedLines } from './lib/sort.js';
 import { icsFileName, taskToICS } from './lib/ics.js';
 import * as Y from './lib/sync.js';
-import { GitHubRepo, explain } from './lib/github.js';
+import { GitHubRepo, explain, isConflict } from './lib/github.js';
 import * as C from './lib/claude.js';
 import * as V from './lib/voice.js';
 import * as Mm from './lib/mindmap.js';
 import * as Sum from './lib/summarize.js';
+import * as N from './lib/notes.js';
+import { adopt, bytesOf, cachedUrl, media, prepare, urlFor } from './lib/media.js';
 import { MapView } from './mapview.js';
 
 const VERSION = 'dev';
@@ -361,7 +363,7 @@ function renderHero() {
   $('#bar-title').textContent = mode === 'panel' ? 'แปะไว้' : VIEW_NAMES[view];
   if (view === 'notes') {
     $('#hero-title').textContent = 'โน้ต';
-    $('#hero-greet').textContent = `${state.memos.length ? `${state.memos.length} โน้ตย่อ · ` : ''}บันทึก${noteDay === today ? `วันนี้ · ${shortDate(today)}` : longDate(noteDay)}`;
+    $('#hero-greet').textContent = `${S.sortedMemos(state).length ? `${S.sortedMemos(state).length} โน้ต · ` : ''}บันทึก${noteDay === today ? `วันนี้ · ${shortDate(today)}` : longDate(noteDay)}`;
     $('#hero-sub').innerHTML = '';
     return;
   }
@@ -531,7 +533,7 @@ function updateHint() {
 
 /** Puts one sorted entry where it belongs. Pure: returns the next state. */
 function route(st, r, now = Date.now()) {
-  if (r.kind === 'note') return S.addMemo(st, r.text, now);
+  if (r.kind === 'note') return S.addMemo(st, N.extractLabels(r.text), now);
   if (r.kind === 'shop') return S.addShop(st, r.items.length ? r.items : [r.text], now);
   if (r.kind === 'money') return r.amount ? S.addMoney(st, r, now) : S.addMemo(st, r.text, now);
   return S.addTask(st, r, now);
@@ -632,6 +634,17 @@ input.addEventListener('keydown', (e) => {
 
 // Several lines pasted at once = several things, each sorted on its own.
 input.addEventListener('paste', (e) => {
+  const pics = pastedImages(e);
+  if (pics.length) {
+    // a copied picture or screenshot becomes a note with it
+    e.preventDefault();
+    noteFromImages(pics, { text: input.value.trim() }).then((ok) => {
+      if (!ok) return;
+      input.value = '';
+      updateHint();
+    });
+    return;
+  }
   const text = e.clipboardData?.getData('text/plain') ?? '';
   if (C.isAnswer(text)) {
     // an answer copied from Claude: read it in the Claude sheet (its job, if one is waiting)
@@ -926,11 +939,126 @@ function ago(ms) {
   return dayLabel(day, today);
 }
 
-function memoCard(m) {
-  const link = URL_RE.test(m.text);
-  return `<button type="button" class="memo${m.pinned ? ' pinned' : ''}" data-memo="${esc(m.id)}">
-${m.pinned ? `<span class="memo-pin">${icon('i-pin')}</span>` : ''}<span class="memo-text">${esc(m.text)}</span>
-<span class="memo-meta">${link ? `${icon('i-link')} ` : ''}${esc(ago(m.updatedAt))}</span></button>`;
+// ---- the notes board (lib/notes.js): cards with pictures, colours and labels ----
+
+let noteSeg = 'all'; // which part of the notes page shows: all | notes | recs | maps | journal
+let noteFilter = 'all'; // all | images | lists | archive | trash
+let noteLabel = '';
+let boardCols = 0;
+
+const imgTag = (id) => {
+  const url = cachedUrl(id);
+  return `<img data-img="${esc(id)}" alt="" decoding="async"${url ? ` src="${url}" class="ready"` : ''}>`;
+};
+
+/** Fills in the pictures of freshly drawn cards (they are read from the device's storage). */
+function hydrateImages(root) {
+  for (const img of $$('img[data-img]:not([src])', root)) {
+    const id = img.dataset.img;
+    urlFor(id)
+      .then((url) => {
+        if (!img.isConnected) return;
+        if (url) {
+          img.src = url;
+          img.classList.add('ready');
+        } else {
+          img.closest('.ph')?.classList.add('away');
+          wantMedia();
+        }
+      })
+      .catch(() => img.closest('.ph')?.classList.add('away'));
+  }
+}
+
+function noteCard(m) {
+  const imgs = m.images ?? [];
+  const shown = imgs.slice(0, 4);
+  const pics = shown.length
+    ? `<div class="nc-imgs n${shown.length}">${shown
+        .map((im, i) => `<span class="ph"${shown.length === 1 && im.w && im.h ? ` style="aspect-ratio:${im.w}/${im.h}"` : ''}>${imgTag(im.id)}${i === 3 && imgs.length > 4 ? `<span class="nc-more">+${imgs.length - 4}</span>` : ''}</span>`)
+        .join('')}</div>`
+    : '';
+  let body = '';
+  if (m.list) {
+    const items = N.listItems(m.text).map((it, i) => ({ ...it, i }));
+    const open = items.filter((it) => !it.done);
+    const done = items.length - open.length;
+    const rest = [open.length > 7 ? `อีก ${open.length - 7} รายการ` : '', done ? `ติ๊กแล้ว ${done}` : ''].filter(Boolean).join(' · ');
+    body =
+      (open.length ? `<ul class="nc-list">${open.slice(0, 7).map((it) => `<li><button type="button" class="nc-check" data-tick="${it.i}" aria-label="ติ๊ก: ${esc(it.text)}"></button><span>${esc(it.text)}</span></li>`).join('')}</ul>` : '') +
+      (rest ? `<p class="nc-rest">${rest}</p>` : '');
+  } else if (m.text) {
+    const big = !m.title && !imgs.length && m.text.length <= 48 && !m.text.includes('\n');
+    body = `<p class="nc-text memo-text${big ? ' big' : ''}">${esc(m.text)}</p>`;
+  }
+  const foot = `<div class="nc-foot">${(m.labels ?? []).map((l) => `<span class="nc-label">${esc(l)}</span>`).join('')}${URL_RE.test(m.text) ? icon('i-link') : ''}<span class="nc-time">${esc(m.trashedAt ? `ลบ${ago(m.trashedAt)}` : ago(m.updatedAt))}</span></div>`;
+  const name = m.title || (m.list ? 'รายการ' : m.text.slice(0, 40)) || 'โน้ตรูปภาพ';
+  return `<article class="memo note-card${m.pinned ? ' pinned' : ''}" data-memo="${esc(m.id)}"${m.color ? ` data-color="${m.color}"` : ''} role="button" tabindex="0" aria-label="โน้ต: ${esc(name)}">${pics}${m.title ? `<h3 class="nc-title">${esc(m.title)}</h3>` : ''}${body}${foot}${m.pinned ? `<span class="memo-pin">${icon('i-pin')}</span>` : ''}</article>`;
+}
+
+/** Cards dealt into columns that fit the width, pinned ones first under their own heading. */
+function boardHtml(list, cols, { headings = true } = {}) {
+  const part = (items) => `<div class="board-cols">${N.deal(items, cols).map((col) => `<div class="board-col">${col.map(noteCard).join('')}</div>`).join('')}</div>`;
+  const pinned = list.filter((m) => m.pinned);
+  const rest = list.filter((m) => !m.pinned);
+  if (!headings || !pinned.length) return list.length ? part(list) : '';
+  return `<h3 class="board-h">ปักหมุด</h3>${part(pinned)}${rest.length ? `<h3 class="board-h">อื่น ๆ</h3>${part(rest)}` : ''}`;
+}
+
+const boardWidth = () => $('#memos').clientWidth || Math.min(980, window.innerWidth - (window.innerWidth >= 840 ? 150 : 32));
+
+function renderFilters() {
+  const live = state.memos.filter((m) => !m.trashedAt);
+  const labels = N.allLabels(state.memos);
+  const archived = live.filter((m) => m.archived).length;
+  const trashed = state.memos.length - live.length;
+  const board = live.filter((m) => !m.archived);
+  const hasImg = board.some((m) => m.images?.length);
+  const hasList = board.some((m) => m.list);
+  // a filter that no longer has anything to show goes back to everything
+  if ((noteFilter === 'archive' && !archived) || (noteFilter === 'trash' && !trashed) || (noteFilter === 'images' && !hasImg) || (noteFilter === 'lists' && !hasList)) noteFilter = 'all';
+  if (noteLabel && !labels.some((l) => l.name === noteLabel)) noteLabel = '';
+  const box = $('#note-filters');
+  box.hidden = !(labels.length || archived || trashed || hasImg || hasList);
+  if (box.hidden) return;
+  const chip = (attrs, on, html) => `<button type="button" class="chip${on ? ' on' : ''}" ${attrs} aria-pressed="${on}">${html}</button>`;
+  const plain = noteFilter === 'all' && !noteLabel;
+  const html =
+    chip('data-nf="all"', plain, 'ทั้งหมด') +
+    labels.map((l) => chip(`data-nlabel="${esc(l.name)}"`, noteLabel === l.name && noteFilter === 'all', `${icon('i-tag')}${esc(l.name)} <small>${l.count}</small>`)).join('') +
+    (hasImg ? chip('data-nf="images"', noteFilter === 'images', `${icon('i-image')}รูปภาพ`) : '') +
+    (hasList ? chip('data-nf="lists"', noteFilter === 'lists', `${icon('i-list')}รายการ`) : '') +
+    (archived ? chip('data-nf="archive"', noteFilter === 'archive', `${icon('i-archive')}เก็บถาวร <small>${archived}</small>`) : '') +
+    (trashed ? chip('data-nf="trash"', noteFilter === 'trash', `${icon('i-trash')}ถังขยะ <small>${trashed}</small>`) : '');
+  if (box.innerHTML !== html) box.innerHTML = html;
+}
+
+function renderBoard() {
+  renderFilters();
+  const list = N.visibleNotes(state.memos, { filter: noteFilter, label: noteLabel });
+  boardCols = N.columnsFor(boardWidth());
+  const host = $('#memos');
+  const html = boardHtml(list, boardCols, { headings: noteFilter !== 'trash' });
+  if (host.dataset.html !== html) {
+    host.dataset.html = html;
+    host.innerHTML = html;
+    hydrateImages(host);
+  }
+  $('#memo-head').textContent = noteFilter === 'archive' ? 'เก็บถาวร' : noteFilter === 'trash' ? 'ถังขยะ' : noteLabel ? `#${noteLabel}` : 'โน้ต';
+  $('#memo-count').textContent = countLabel(list.length);
+  const empty = $('#memos-empty');
+  empty.hidden = list.length > 0;
+  if (!list.length)
+    empty.textContent =
+      noteFilter === 'trash'
+        ? 'ถังขยะว่าง'
+        : noteFilter !== 'all' || noteLabel
+          ? 'ไม่มีโน้ตในมุมมองนี้'
+          : 'แตะ “จดโน้ต…” หรือพิมพ์ในช่องแปะ แนบรูป วาดเขียน ทำรายการติ๊ก ใส่สีและป้ายกำกับได้';
+  if (noteFilter === 'trash' && list.length) {
+    empty.hidden = false;
+    empty.textContent = `โน้ตในถังขยะจะถูกลบถาวรหลัง ${N.TRASH_DAYS} วัน`;
+  }
 }
 
 function renderNotes() {
@@ -942,24 +1070,31 @@ function renderNotes() {
     return;
   }
   renderVoiceLists();
-  const memos = S.sortedMemos(state);
-  $('#memo-count').textContent = countLabel(memos.length);
-  $('#memos').innerHTML = memos.map(memoCard).join('');
-  $('#memos-empty').hidden = memos.length > 0;
+  renderBoard();
+  for (const b of $$('#notes-seg [data-seg]')) b.setAttribute('aria-selected', String(b.dataset.seg === noteSeg));
+  for (const part of $$('#notes-main .seg-part')) part.hidden = noteSeg !== 'all' && part.dataset.part !== noteSeg;
+  $('#recs-empty').hidden = noteSeg !== 'recs' || state.recs.length > 0;
+  $('#maps-empty').hidden = noteSeg !== 'maps' || state.maps.length > 0;
 }
+
+// columns follow the width (rotation, split screen, the pop-up window being resized)
+new ResizeObserver(() => {
+  if (view === 'notes' && boardCols && N.columnsFor(boardWidth()) !== boardCols) renderNotes();
+}).observe($('#memos'));
 
 function renderSearch(q) {
   const r = S.search(state, q);
   const part = (title, html) => (html ? `<h3>${title}</h3>${html}` : '');
   const html =
     part('งาน', r.tasks.length ? `<ul class="list">${r.tasks.map((t) => taskItem(t, { withDay: true })).join('')}</ul>` : '') +
-    part('โน้ตย่อ', r.memos.length ? `<div class="memos">${r.memos.map(memoCard).join('')}</div>` : '') +
+    part('โน้ต', r.memos.length ? `<div class="nboard">${boardHtml(r.memos, N.columnsFor(boardWidth()), { headings: false })}</div>` : '') +
     part('บันทึกประจำวัน', r.notes.length ? `<ul class="list">${r.notes.map((n) => `<li class="plain-row"><button type="button" class="row-btn" data-note-day="${n.day}"><strong>${esc(shortDate(n.day, today))}</strong><span>${esc(n.line)}</span></button></li>`).join('')}</ul>` : '') +
     part('ของต้องซื้อ', r.shop.length ? `<ul class="list shop-list">${r.shop.map(shopItem).join('')}</ul>` : '') +
     part('รายจ่าย', r.money.length ? `<ul class="list">${r.money.map(moneyItem).join('')}</ul>` : '') +
     part('บันทึกเสียง', r.recs.length ? `<ul class="list">${r.recs.map(recRow).join('')}</ul>` : '') +
     part('มายด์แมป', r.maps.length ? `<div class="map-cards">${r.maps.map(mapCard).join('')}</div>` : '');
   $('#search-results').innerHTML = html || `<p class="empty">ไม่เจอ “${esc(q)}”</p>`;
+  hydrateImages($('#search-results'));
 }
 
 $('#search').addEventListener('input', () => renderNotes());
@@ -967,7 +1102,29 @@ $('#search').addEventListener('input', () => renderNotes());
 $('#view-notes').addEventListener('click', (e) => {
   const memo = e.target.closest('[data-memo]')?.dataset.memo;
   if (memo) {
-    openItem('memo', memo);
+    const tick = e.target.closest('[data-tick]')?.dataset.tick;
+    if (tick != null) {
+      // ticking an item on the card, without opening the note
+      const m = state.memos.find((x) => x.id === memo);
+      if (m) commit(S.patchMemo(state, memo, { text: N.toggleItem(m.text, Number(tick)) }), { undoable: true });
+      buzz();
+      return;
+    }
+    openNote(memo);
+    return;
+  }
+  const seg = e.target.closest('[data-seg]')?.dataset.seg;
+  if (seg) {
+    noteSeg = seg;
+    renderNotes();
+    return;
+  }
+  const nf = e.target.closest('[data-nf]')?.dataset.nf;
+  const nl = e.target.closest('[data-nlabel]')?.dataset.nlabel;
+  if (nf || nl != null) {
+    noteFilter = nf ?? 'all';
+    noteLabel = nl ?? '';
+    renderNotes();
     return;
   }
   const money = e.target.closest('[data-money]')?.dataset.money;
@@ -1146,6 +1303,984 @@ itemForm.addEventListener('click', async (e) => {
 itemDialog.addEventListener('close', () => {
   editingItem = null;
 });
+
+// ---------------------------------------------------------------------------
+// The note editor: title, text or a checklist, pictures, colour, labels. It saves by itself
+// (while typing, when it closes, when the app goes to the background); an empty note is dropped.
+
+const noteDialog = $('#note-dialog');
+let draft = null; // the note being edited: { id, title, text, list, items, color, labels, images, pinned, archived, readonly, saved }
+let draftTimer = 0;
+let busyImages = 0;
+
+function openNote(id = null, { list = false, text = '', title = '', images = [], labels = null, then = '' } = {}) {
+  const m = id ? state.memos.find((x) => x.id === id) : null;
+  if (id && !m) return;
+  if (noteDialog.open) closeNote();
+  draft = m
+    ? { id: m.id, title: m.title ?? '', text: m.text, list: !!m.list, color: m.color ?? '', labels: [...(m.labels ?? [])], images: [...(m.images ?? [])], pinned: !!m.pinned, archived: !!m.archived, readonly: !!m.trashedAt, at: m.updatedAt, saved: false }
+    : { id: S.uid(), title, text, list, color: '', labels: labels ?? (noteLabel ? [noteLabel] : []), images: [...images], pinned: false, archived: false, readonly: false, at: 0, saved: false };
+  draft.items = draft.list ? N.listItems(draft.text) : [];
+  if (draft.list && !draft.items.length) draft.items = [{ text: '', done: false }];
+  $('#note-title').value = draft.title;
+  $('#note-text').value = draft.list ? '' : draft.text;
+  $('#note-colors').hidden = true;
+  $('#note-labeler').hidden = true;
+  $('#note-sum').hidden = true;
+  for (const b of $$('[data-nact="color"], [data-nact="label"]', noteDialog)) b.setAttribute('aria-expanded', 'false');
+  noteDialog.classList.toggle('readonly', draft.readonly);
+  for (const el of [$('#note-title'), $('#note-text')]) el.readOnly = draft.readonly;
+  renderDraft();
+  noteDialog.showModal();
+  growText();
+  if (draft.readonly) return;
+  if (then === 'image') $('#note-file').click();
+  else if (then === 'camera') $('#note-camera').click();
+  else if (then === 'draw') openDraw();
+  else if (!m) requestAnimationFrame(() => (draft?.list ? $('#note-list input[type="text"]') : $('#note-text'))?.focus());
+  if (images.length) saveDraft();
+}
+
+function renderDraft() {
+  if (!draft) return;
+  if (draft.color) noteDialog.dataset.color = draft.color;
+  else delete noteDialog.dataset.color;
+  const pin = $('[data-nact="pin"]', noteDialog);
+  pin.setAttribute('aria-pressed', String(draft.pinned));
+  pin.setAttribute('aria-label', draft.pinned ? 'เลิกปักหมุด' : 'ปักหมุด');
+  $('[data-nact="archive"]', noteDialog).setAttribute('aria-label', draft.archived ? 'นำออกจากที่เก็บถาวร' : 'เก็บถาวร');
+  $('[data-nact="archive"]', noteDialog).title = draft.archived ? 'นำออกจากที่เก็บถาวร' : 'เก็บถาวร';
+  const listBtn = $('[data-nact="list"]', noteDialog);
+  listBtn.setAttribute('aria-pressed', String(draft.list));
+  $('#note-text').hidden = draft.list;
+  $('#note-list').hidden = !draft.list;
+  renderDraftImages();
+  renderDraftList();
+  renderDraftLabels();
+  $('#note-meta').textContent = draft.readonly ? 'อยู่ในถังขยะ แตะ ⋮ เพื่อกู้คืน' : draft.at ? `แก้ไขล่าสุด ${ago(draft.at)}` : '';
+  $('#note-state').textContent = '';
+}
+
+function renderDraftImages() {
+  const box = $('#note-images');
+  box.classList.toggle('one', draft.images.length === 1 && !busyImages);
+  box.innerHTML =
+    draft.images
+      .map((im, i) => `<button type="button" class="ph" data-img-open="${i}" aria-label="ดูรูปที่ ${i + 1}"${draft.images.length === 1 && im.w && im.h ? ` style="aspect-ratio:${im.w}/${im.h}"` : ''}>${imgTag(im.id)}</button>`)
+      .join('') + (busyImages ? `<span class="ph busy">กำลังเตรียมรูป…</span>` : '');
+  hydrateImages(box);
+}
+
+function renderDraftLabels() {
+  $('#note-labels').innerHTML = draft.labels.map((l, i) => `<button type="button" class="nc-label" data-label-x="${i}" aria-label="เอาป้าย ${esc(l)} ออก"${draft.readonly ? ' disabled' : ''}>${esc(l)}${draft.readonly ? '' : '<b aria-hidden="true">×</b>'}</button>`).join('');
+  const all = [...new Set([...draft.labels, ...N.allLabels(state.memos).map((l) => l.name)])];
+  $('#note-label-list').innerHTML = all.map((l) => `<button type="button" class="chip${draft.labels.includes(l) ? ' on' : ''}" data-label-pick="${esc(l)}" aria-pressed="${draft.labels.includes(l)}">${esc(l)}</button>`).join('');
+  $('#note-label-list').hidden = !all.length;
+}
+
+function renderDraftList() {
+  if (!draft.list) return;
+  const row = (it, i) =>
+    `<div class="nl-row${it.done ? ' done' : ''}" data-i="${i}"><button type="button" class="nl-check" data-nl="toggle" role="checkbox" aria-checked="${it.done}" aria-label="${it.done ? 'เอาติ๊กออก' : 'ติ๊ก'}"></button><input type="text" value="${esc(it.text)}" maxlength="500" placeholder="รายการ" aria-label="รายการที่ ${i + 1}" enterkeyhint="next" autocomplete="off"${draft.readonly ? ' readonly' : ''}><button type="button" class="nl-x" data-nl="remove" aria-label="ลบรายการนี้">×</button></div>`;
+  const items = draft.items.map((it, i) => ({ it, i }));
+  const open = items.filter((x) => !x.it.done);
+  const done = items.filter((x) => x.it.done);
+  $('#note-list').innerHTML =
+    open.map((x) => row(x.it, x.i)).join('') +
+    (draft.readonly ? '' : `<button type="button" class="nl-add" data-nl="add">${icon('i-plus')}<span>เพิ่มรายการ</span></button>`) +
+    (done.length ? `<p class="nl-done-head">ติ๊กแล้ว ${done.length}</p>${done.map((x) => row(x.it, x.i)).join('')}` : '');
+}
+
+const focusItem = (i, end = true) => {
+  const el = $(`#note-list .nl-row[data-i="${i}"] input[type="text"]`);
+  if (!el) return;
+  el.focus();
+  const at = end ? el.value.length : 0;
+  el.setSelectionRange(at, at);
+};
+
+function growText() {
+  const el = $('#note-text');
+  if (el.hidden) return;
+  el.style.height = 'auto';
+  el.style.height = `${Math.max(96, el.scrollHeight + 2)}px`;
+}
+
+/** What the editor holds now, as the fields of a note. */
+function readDraft() {
+  return {
+    title: $('#note-title').value,
+    text: draft.list ? N.listText(draft.items) : $('#note-text').value,
+    list: draft.list,
+    color: draft.color || undefined,
+    labels: draft.labels,
+    images: draft.images,
+    pinned: draft.pinned,
+    archived: draft.archived,
+  };
+}
+
+function saveDraft() {
+  clearTimeout(draftTimer);
+  if (!draft || draft.readonly) return false;
+  const n = readDraft();
+  const exists = state.memos.some((m) => m.id === draft.id);
+  const next = exists ? S.patchMemo(state, draft.id, n) : S.addMemo(state, { ...n, id: draft.id });
+  if (next === state) return false;
+  // one undo takes back everything done since the note was opened
+  commit(next, { undoable: !draft.saved });
+  draft.saved = true;
+  $('#note-state').textContent = next.memos.some((m) => m.id === draft.id) ? 'บันทึกแล้ว' : '';
+  persistOnce();
+  return true;
+}
+
+function touchDraft() {
+  if (!draft || draft.readonly) return;
+  $('#note-state').textContent = '';
+  clearTimeout(draftTimer);
+  draftTimer = setTimeout(saveDraft, 900);
+}
+
+function closeNote() {
+  saveDraft();
+  if (noteDialog.open) noteDialog.close();
+}
+
+noteDialog.addEventListener('close', () => {
+  saveDraft();
+  draft = null;
+});
+// Escape and the Android back button close it like the arrow does (saving first)
+noteDialog.addEventListener('cancel', () => saveDraft());
+document.addEventListener('visibilitychange', () => document.visibilityState === 'hidden' && saveDraft());
+window.addEventListener('pagehide', () => saveDraft());
+
+$('#note-title').addEventListener('input', touchDraft);
+$('#note-title').addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter' || e.isComposing) return;
+  e.preventDefault();
+  if (draft?.list) focusItem(draft.items.findIndex((it) => !it.done));
+  else $('#note-text').focus();
+});
+$('#note-text').addEventListener('input', () => {
+  growText();
+  touchDraft();
+});
+
+$('#note-list').addEventListener('input', (e) => {
+  const row = e.target.closest('.nl-row');
+  if (!row || !draft) return;
+  draft.items[Number(row.dataset.i)].text = e.target.value;
+  touchDraft();
+});
+$('#note-list').addEventListener('keydown', (e) => {
+  const row = e.target.closest('.nl-row');
+  if (!row || !draft || draft.readonly || e.isComposing) return;
+  const i = Number(row.dataset.i);
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    const at = e.target.selectionStart ?? e.target.value.length;
+    const rest = e.target.value.slice(at);
+    draft.items[i].text = e.target.value.slice(0, at);
+    draft.items.splice(i + 1, 0, { text: rest, done: draft.items[i].done });
+    renderDraftList();
+    focusItem(i + 1, false);
+    touchDraft();
+  } else if (e.key === 'Backspace' && !e.target.value && draft.items.length > 1) {
+    e.preventDefault();
+    draft.items.splice(i, 1);
+    renderDraftList();
+    focusItem(Math.max(0, i - 1));
+    touchDraft();
+  }
+});
+$('#note-list').addEventListener('click', (e) => {
+  const act = e.target.closest('[data-nl]')?.dataset.nl;
+  if (!act || !draft || draft.readonly) return;
+  const i = Number(e.target.closest('.nl-row')?.dataset.i);
+  if (act === 'toggle') {
+    draft.items[i].done = !draft.items[i].done;
+    buzz();
+  }
+  if (act === 'remove') draft.items.splice(i, 1);
+  if (act === 'add') draft.items.push({ text: '', done: false });
+  renderDraftList();
+  if (act === 'add') focusItem(draft.items.length - 1);
+  touchDraft();
+});
+
+function addLabel(raw) {
+  const label = N.cleanLabel(raw);
+  if (!label || !draft) return;
+  if (!draft.labels.some((l) => l.toLowerCase() === label.toLowerCase())) {
+    if (draft.labels.length >= N.MAX_LABELS) {
+      toast(`ใส่ได้ ${N.MAX_LABELS} ป้ายต่อโน้ต`);
+      return;
+    }
+    draft.labels.push(label);
+  }
+  renderDraftLabels();
+  touchDraft();
+}
+$('#note-label-new').addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter' || e.isComposing) return;
+  e.preventDefault();
+  addLabel(e.target.value);
+  e.target.value = '';
+});
+
+noteDialog.addEventListener('click', (e) => {
+  if (!draft) return;
+  const open = e.target.closest('[data-img-open]')?.dataset.imgOpen;
+  if (open != null) {
+    openViewer(draft.images, Number(open), { editable: !draft.readonly });
+    return;
+  }
+  if (draft.readonly && !e.target.closest('[data-nact="close"], [data-nact="more"]')) return;
+  const x = e.target.closest('[data-label-x]')?.dataset.labelX;
+  if (x != null) {
+    draft.labels.splice(Number(x), 1);
+    renderDraftLabels();
+    touchDraft();
+    return;
+  }
+  const pick = e.target.closest('[data-label-pick]')?.dataset.labelPick;
+  if (pick != null) {
+    if (draft.labels.includes(pick)) draft.labels = draft.labels.filter((l) => l !== pick);
+    else addLabel(pick);
+    renderDraftLabels();
+    touchDraft();
+    return;
+  }
+  const color = e.target.closest('[data-swatch]')?.dataset.swatch;
+  if (color != null) {
+    draft.color = color;
+    renderDraft();
+    renderSwatches();
+    touchDraft();
+    return;
+  }
+  const act = e.target.closest('[data-nact]')?.dataset.nact;
+  if (!act) return;
+  if (act === 'close') closeNote();
+  if (act === 'pin') {
+    draft.pinned = !draft.pinned;
+    if (draft.pinned) draft.archived = false;
+    renderDraft();
+    touchDraft();
+    buzz();
+  }
+  if (act === 'archive') {
+    const on = !draft.archived;
+    draft.archived = on;
+    if (on) draft.pinned = false;
+    const empty = N.isEmptyNote(readDraft());
+    closeNote();
+    if (!empty) toast(on ? 'เก็บถาวรแล้ว' : 'นำกลับมาที่กระดานแล้ว', { label: 'เลิกทำ', run: undo });
+  }
+  if (act === 'more') openNoteMenu();
+  if (act === 'image') $('#note-file').click();
+  if (act === 'camera') $('#note-camera').click();
+  if (act === 'draw') openDraw();
+  if (act === 'list') {
+    if (draft.list) {
+      $('#note-text').value = draft.items.map((it) => it.text).filter(Boolean).join('\n');
+      draft.list = false;
+    } else {
+      draft.items = N.listItems($('#note-text').value);
+      if (!draft.items.length) draft.items = [{ text: '', done: false }];
+      draft.list = true;
+    }
+    renderDraft();
+    growText();
+    if (draft.list) focusItem(draft.items.length - 1);
+    touchDraft();
+  }
+  if (act === 'color' || act === 'label') {
+    const box = act === 'color' ? $('#note-colors') : $('#note-labeler');
+    const other = act === 'color' ? $('#note-labeler') : $('#note-colors');
+    other.hidden = true;
+    box.hidden = !box.hidden;
+    $('[data-nact="color"]', noteDialog).setAttribute('aria-expanded', String(!$('#note-colors').hidden));
+    $('[data-nact="label"]', noteDialog).setAttribute('aria-expanded', String(!$('#note-labeler').hidden));
+    if (act === 'color') renderSwatches();
+    else if (!box.hidden && matchMedia('(hover: hover)').matches) $('#note-label-new').focus();
+  }
+  if (act === 'label-add') {
+    addLabel($('#note-label-new').value);
+    $('#note-label-new').value = '';
+  }
+});
+
+function renderSwatches() {
+  $('#note-colors').innerHTML =
+    `<button type="button" class="swatch none" data-swatch="" aria-pressed="${!draft.color}" aria-label="ไม่ใส่สี" title="ไม่ใส่สี"></button>` +
+    N.NOTE_COLORS.map((c) => `<button type="button" class="swatch" data-swatch="${c}" data-color="${c}" aria-pressed="${draft.color === c}" aria-label="สี${N.COLOR_NAMES[c]}" title="${N.COLOR_NAMES[c]}"></button>`).join('');
+}
+
+// ---- pictures: from the gallery, the camera, the clipboard, or dropped on the page ----
+
+/** Keeps pictures on this device and returns their entries for a note ([] when none could be read). */
+async function storeImages(files, { png = false } = {}) {
+  const out = [];
+  let failed = 0;
+  let full = false;
+  for (const file of files) {
+    try {
+      const made = await prepare(file, { png });
+      const id = S.uid();
+      await media.put(id, made);
+      out.push({ id, w: made.w, h: made.h, ...(made.t ? { t: made.t } : {}) });
+    } catch (err) {
+      failed++;
+      full ||= err?.name === 'QuotaExceededError';
+    }
+  }
+  if (failed) toast(full ? 'ที่เก็บในเครื่องเต็ม ลบรูปหรือบันทึกเสียงเก่าก่อน' : failed === files.length ? 'เปิดรูปนี้ไม่ได้' : `เปิดไม่ได้ ${failed} รูป`);
+  return out;
+}
+
+async function addImagesToDraft(files) {
+  const list = [...files].filter((f) => f && (f instanceof HTMLCanvasElement || /^image\//.test(f.type) || /\.(?:jpe?g|png|webp|gif|heic|heif|avif|bmp)$/i.test(f.name ?? '')));
+  if (!list.length || !draft || draft.readonly) return;
+  const room = N.MAX_IMAGES - draft.images.length;
+  if (room <= 0) {
+    toast(`แนบได้ ${N.MAX_IMAGES} รูปต่อโน้ต`);
+    return;
+  }
+  const target = draft;
+  busyImages++;
+  renderDraftImages();
+  const made = await storeImages(list.slice(0, room));
+  busyImages--;
+  if (draft !== target) {
+    // the note was closed while the pictures were being prepared: add them to it all the same
+    if (made.length) commit(state.memos.some((m) => m.id === target.id) ? S.patchMemo(state, target.id, { images: [...target.images, ...made] }) : S.addMemo(state, { id: target.id, text: '', images: made }));
+    return;
+  }
+  draft.images.push(...made);
+  renderDraftImages();
+  if (made.length) saveDraft();
+  if (list.length > room) toast(`แนบได้ ${N.MAX_IMAGES} รูปต่อโน้ต`);
+}
+
+for (const id of ['#note-file', '#note-camera'])
+  $(id).addEventListener('change', (e) => {
+    const files = [...(e.target.files ?? [])];
+    e.target.value = '';
+    addImagesToDraft(files);
+  });
+
+const pastedImages = (e) => [...(e.clipboardData?.files ?? [])].filter((f) => /^image\//.test(f.type));
+noteDialog.addEventListener('paste', (e) => {
+  const files = pastedImages(e);
+  if (!files.length) return;
+  e.preventDefault();
+  addImagesToDraft(files);
+});
+
+/** A new note that starts with these pictures, opened for the words to be added. */
+async function noteFromImages(files, { text = '' } = {}) {
+  const list = [...files].filter((f) => /^image\//.test(f.type) || /\.(?:jpe?g|png|webp|gif|heic|heif|avif|bmp)$/i.test(f.name ?? ''));
+  if (!list.length) return false;
+  setView('notes');
+  toast(list.length > 1 ? `กำลังเตรียม ${list.length} รูป…` : 'กำลังเตรียมรูป…');
+  const images = await storeImages(list.slice(0, N.MAX_IMAGES));
+  if (!images.length) return false;
+  openNote(null, { images, text });
+  return true;
+}
+
+// dropping pictures on the page (computer, DeX, split screen with the gallery)
+let dragDepth = 0;
+const hasFiles = (e) => [...(e.dataTransfer?.types ?? [])].includes('Files');
+document.addEventListener('dragenter', (e) => {
+  if (!hasFiles(e)) return;
+  dragDepth++;
+  document.documentElement.classList.add('drop-on');
+});
+document.addEventListener('dragleave', (e) => {
+  if (!hasFiles(e)) return;
+  if (--dragDepth <= 0) document.documentElement.classList.remove('drop-on');
+});
+document.addEventListener('dragover', (e) => hasFiles(e) && e.preventDefault());
+document.addEventListener('drop', (e) => {
+  if (!hasFiles(e)) return;
+  e.preventDefault();
+  dragDepth = 0;
+  document.documentElement.classList.remove('drop-on');
+  const files = [...e.dataTransfer.files];
+  if (draft && noteDialog.open) addImagesToDraft(files);
+  else if (!document.querySelector('dialog[open]')) noteFromImages(files);
+});
+
+// ---- ⋮ on a note ----
+
+function openNoteMenu() {
+  const menuEl = $('#note-menu');
+  const n = readDraft();
+  const words = (n.list ? N.plainText(n.text) : n.text).trim();
+  const trashed = draft.readonly;
+  const show = { copy: !!(words || n.title), share: !!(words || n.title), dup: !trashed && !N.isEmptyNote(n), sum: !trashed && !n.list && words.length >= 120, map: !trashed && words.length >= 40, task: !trashed && !!(words || n.title), restore: trashed, delete: true };
+  for (const b of $$('[data-nm]', menuEl)) b.hidden = !show[b.dataset.nm];
+  $('[data-nm="delete"]', menuEl).textContent = trashed ? 'ลบถาวร' : 'ย้ายไปถังขยะ';
+  menuEl.showModal();
+}
+
+$('#note-menu').addEventListener('click', async (e) => {
+  const menuEl = $('#note-menu');
+  const act = e.target.closest('[data-nm]')?.dataset.nm;
+  if (!act) {
+    if (e.target === menuEl) menuEl.close();
+    return;
+  }
+  menuEl.close();
+  if (!draft) return;
+  const id = draft.id;
+  const n = readDraft();
+  const words = [n.title, n.list ? N.listItems(n.text).map((it) => `${it.done ? '☑' : '☐'} ${it.text}`).join('\n') : n.text].filter((x) => x?.trim()).join('\n\n');
+  if (act === 'copy') copyText(words);
+  if (act === 'share') {
+    try {
+      if (android?.shareText) android.shareText(words);
+      else if (navigator.share) await navigator.share({ title: n.title || undefined, text: words });
+      else copyText(words, 'คัดลอกแล้ว วางในแอปที่จะส่งได้เลย');
+    } catch (err) {
+      if (err?.name !== 'AbortError') copyText(words);
+    }
+  }
+  if (act === 'dup') {
+    saveDraft();
+    closeNote();
+    commit(S.addMemo(state, { ...n, pinned: false, archived: false, title: n.title ? `${n.title} (สำเนา)` : '' }), { undoable: true });
+    toast('ทำสำเนาแล้ว', { label: 'เลิกทำ', run: undo });
+  }
+  if (act === 'sum') summarizeDraft();
+  if (act === 'map') {
+    closeNote();
+    memoToMap(id);
+  }
+  if (act === 'task') {
+    const p = parseWhen([n.title, n.list ? N.plainText(n.text) : n.text].filter((x) => x?.trim()).join(' ').replace(/\s+/g, ' ').trim().slice(0, 2000), Date.now());
+    saveDraft();
+    draft.readonly = true; // nothing more to save: the note becomes a task
+    noteDialog.close();
+    commit(S.addTask(state.memos.some((m) => m.id === id) ? S.trashMemo(state, id) : state, p), { undoable: true, animate: true });
+    toast(`ย้ายไปเป็นงาน${p.day ? ` ${describeWhen(p.day, p.time, today)}` : 'ในกล่องรับ'}แล้ว (โน้ตอยู่ในถังขยะ)`, { label: 'เลิกทำ', run: undo });
+  }
+  if (act === 'restore') {
+    noteDialog.close();
+    commit(S.restoreMemo(state, id), { undoable: true });
+    toast('กู้คืนแล้ว', { label: 'เลิกทำ', run: undo });
+  }
+  if (act === 'delete') {
+    const forever = draft.readonly;
+    if (!forever) saveDraft();
+    draft.readonly = true;
+    noteDialog.close();
+    if (!state.memos.some((m) => m.id === id)) return;
+    commit(forever ? S.deleteMemo(state, id) : S.trashMemo(state, id), { undoable: true, animate: true });
+    toast(forever ? 'ลบถาวรแล้ว' : `ย้ายไปถังขยะแล้ว (เก็บไว้ ${N.TRASH_DAYS} วัน)`, { label: 'เลิกทำ', run: undo });
+  }
+});
+
+/** A long note summarised on the device (lib/summarize.js, no AI), shown under it. */
+function summarizeDraft() {
+  const n = readDraft();
+  const box = $('#note-sum');
+  let a = null;
+  try {
+    a = Sum.analyze(n.text, { title: n.title || 'โน้ต', now: Date.now() });
+  } catch (err) {
+    console.error(err);
+  }
+  if (!a?.summary) {
+    toast('โน้ตสั้นเกินไปที่จะสรุป');
+    return;
+  }
+  box.hidden = false;
+  box.dataset.text = a.summary;
+  box.innerHTML = `${miniMarkdown(a.summary)}<div class="sheet-buttons"><button type="button" data-sum="top">แทรกไว้บนสุด</button><button type="button" data-sum="copy">คัดลอก</button><button type="button" data-sum="hide">ซ่อน</button></div>`;
+  box.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+}
+$('#note-sum').addEventListener('click', (e) => {
+  const act = e.target.closest('[data-sum]')?.dataset.sum;
+  const box = $('#note-sum');
+  if (!act || !draft) return;
+  const plain = (box.dataset.text ?? '').replace(/\*\*(.+?)\*\*/g, '$1');
+  if (act === 'copy') copyText(plain);
+  if (act === 'top') {
+    $('#note-text').value = `สรุป\n${plain}\n\n${$('#note-text').value}`;
+    growText();
+    touchDraft();
+    box.hidden = true;
+    $('#note-body').scrollTo({ top: 0, behavior: 'smooth' });
+  }
+  if (act === 'hide') box.hidden = true;
+});
+
+// ---------------------------------------------------------------------------
+// Picture viewer: swipe between a note's pictures, pinch or double-tap to zoom
+
+const viewer = $('#img-viewer');
+const viewerImg = $('#viewer-img');
+let viewing = null; // { images, i, editable }
+let zoom = { k: 1, x: 0, y: 0 };
+
+function openViewer(images, i = 0, { editable = false } = {}) {
+  if (!images.length) return;
+  viewing = { images, i: Math.max(0, Math.min(i, images.length - 1)), editable };
+  if (!viewer.open) viewer.showModal();
+  showViewed();
+}
+
+async function showViewed() {
+  if (!viewing) return;
+  const im = viewing.images[viewing.i];
+  zoom = { k: 1, x: 0, y: 0 };
+  applyZoom();
+  $('#viewer-count').textContent = viewing.images.length > 1 ? `${viewing.i + 1} / ${viewing.images.length}` : '';
+  $('[data-vact="prev"]', viewer).hidden = viewing.i === 0;
+  $('[data-vact="next"]', viewer).hidden = viewing.i >= viewing.images.length - 1;
+  $('[data-vact="delete"]', viewer).hidden = !viewing.editable;
+  $('[data-vact="draw"]', viewer).hidden = !viewing.editable;
+  // the small copy at once, then the picture itself
+  viewerImg.src = cachedUrl(im.id) || '';
+  const url = await urlFor(im.id, { full: true }).catch(() => '');
+  if (viewing?.images[viewing.i] !== im) return;
+  if (url) viewerImg.src = url;
+  else toast('รูปนี้ยังไม่อยู่ในเครื่องนี้ จะมาเมื่อซิงก์');
+}
+
+const applyZoom = () => (viewerImg.style.transform = `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.k})`);
+
+function stepViewer(d) {
+  if (!viewing) return;
+  const i = viewing.i + d;
+  if (i < 0 || i >= viewing.images.length) return;
+  viewing.i = i;
+  showViewed();
+}
+
+{
+  const stage = $('#viewer-stage');
+  const pts = new Map();
+  let start = null; // gesture start: { k, x, y, dist, cx, cy }
+  let lastTap = 0;
+  const center = () => {
+    const [a, b] = [...pts.values()];
+    return b ? { cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2, dist: Math.hypot(a.x - b.x, a.y - b.y) } : { cx: a.x, cy: a.y, dist: 0 };
+  };
+  stage.addEventListener('pointerdown', (e) => {
+    stage.setPointerCapture(e.pointerId);
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    start = { ...zoom, ...center(), t: Date.now(), moved: false };
+  });
+  stage.addEventListener('pointermove', (e) => {
+    if (!pts.has(e.pointerId) || !start) return;
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    const c = center();
+    if (Math.hypot(c.cx - start.cx, c.cy - start.cy) > 6) start.moved = true;
+    if (pts.size >= 2 && start.dist) {
+      zoom.k = Math.max(1, Math.min(6, start.k * (c.dist / start.dist)));
+      start.moved = true;
+    }
+    if (zoom.k > 1 || pts.size >= 2) {
+      zoom.x = start.x + (c.cx - start.cx);
+      zoom.y = start.y + (c.cy - start.cy);
+    } else zoom.x = c.cx - start.cx; // a swipe to the next picture follows the finger
+    applyZoom();
+  });
+  const end = (e) => {
+    if (!pts.has(e.pointerId)) return;
+    pts.delete(e.pointerId);
+    if (pts.size) {
+      start = { ...zoom, ...center(), t: 0, moved: true };
+      return;
+    }
+    if (!start) return;
+    const dx = zoom.x - start.x;
+    if (zoom.k <= 1.02) {
+      zoom = { k: 1, x: 0, y: 0 };
+      if (Math.abs(dx) > 70) stepViewer(dx < 0 ? 1 : -1);
+      else if (!start.moved) {
+        // double tap (or double click): zoom in where it was tapped, and back out
+        const now = Date.now();
+        if (now - lastTap < 320) {
+          const r = stage.getBoundingClientRect();
+          zoom = { k: 2.6, x: (r.width / 2 - (e.clientX - r.left)) * 1.6, y: (r.height / 2 - (e.clientY - r.top)) * 1.6 };
+          lastTap = 0;
+        } else lastTap = now;
+      }
+    } else if (!start.moved && Date.now() - lastTap < 320) {
+      zoom = { k: 1, x: 0, y: 0 };
+      lastTap = 0;
+    } else if (!start.moved) lastTap = Date.now();
+    applyZoom();
+    start = null;
+  };
+  stage.addEventListener('pointerup', end);
+  stage.addEventListener('pointercancel', end);
+  stage.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    zoom.k = Math.max(1, Math.min(6, zoom.k * (e.deltaY < 0 ? 1.15 : 0.87)));
+    if (zoom.k === 1) zoom.x = zoom.y = 0;
+    applyZoom();
+  }, { passive: false });
+}
+
+viewer.addEventListener('keydown', (e) => {
+  if (e.key === 'ArrowRight') stepViewer(1);
+  if (e.key === 'ArrowLeft') stepViewer(-1);
+});
+viewer.addEventListener('close', () => {
+  viewing = null;
+  viewerImg.removeAttribute('src');
+});
+viewer.addEventListener('click', async (e) => {
+  const act = e.target.closest('[data-vact]')?.dataset.vact;
+  if (!act || !viewing) return;
+  const im = viewing.images[viewing.i];
+  if (act === 'close') viewer.close();
+  if (act === 'prev') stepViewer(-1);
+  if (act === 'next') stepViewer(1);
+  if (act === 'save') {
+    const rec = await media.get(im.id).catch(() => null);
+    if (!rec) {
+      toast('รูปนี้ยังไม่อยู่ในเครื่องนี้');
+      return;
+    }
+    await shareBlob(`paewai-${im.id}.${im.t === 'png' ? 'png' : 'jpg'}`, rec.blob);
+  }
+  if (act === 'delete' && draft) {
+    const i = draft.images.findIndex((x) => x.id === im.id);
+    if (i < 0) return;
+    draft.images.splice(i, 1);
+    renderDraftImages();
+    saveDraft();
+    if (!draft.images.length) viewer.close();
+    else {
+      viewing = { ...viewing, images: draft.images, i: Math.min(viewing.i, draft.images.length - 1) };
+      showViewed();
+    }
+    const noteId = draft.id;
+    toast('เอารูปออกแล้ว', {
+      label: 'เลิกทำ',
+      run: () => {
+        if (draft?.id !== noteId || draft.images.some((x) => x.id === im.id)) return;
+        draft.images.splice(Math.min(i, draft.images.length), 0, im);
+        renderDraftImages();
+        saveDraft();
+      },
+    });
+  }
+  if (act === 'draw' && draft) {
+    viewer.close();
+    openDraw({ over: im });
+  }
+});
+
+/** A picture or drawing to the share sheet, the Android app's "save", or a download. */
+async function shareBlob(name, blob) {
+  if (android?.saveBase64) {
+    const reader = new FileReader();
+    reader.onload = () => android.saveBase64(name, String(reader.result).split(',')[1], blob.type);
+    reader.readAsDataURL(blob);
+    return;
+  }
+  const file = new File([blob], name, { type: blob.type });
+  try {
+    if (navigator.canShare?.({ files: [file] })) await navigator.share({ files: [file] });
+    else {
+      const url = URL.createObjectURL(file);
+      Object.assign(document.createElement('a'), { href: url, download: name }).click();
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    }
+  } catch (err) {
+    if (err?.name !== 'AbortError') toast('บันทึกรูปไม่ได้');
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Drawing (finger, mouse or S Pen): kept as a picture of the note. Ink is its own layer over the
+// paper (white, or the picture being drawn on), so the eraser only removes ink.
+
+const drawDialog = $('#draw-dialog');
+const drawCanvas = $('#draw-canvas');
+const DRAW_COLORS = ['#16161a', '#e5393b', '#f29b05', '#2e9e4f', '#0381fe', '#8e44ec'];
+let drawing = null; // { strokes, redo, tool, color, size, ink, paper, over, dpr, cur, sawPen }
+let drawPrefs = { tool: 'pen', color: DRAW_COLORS[0], size: 5 }; // the pen as it was left
+let drawCancelArmed = 0;
+
+$('#draw-colors').innerHTML = DRAW_COLORS.map((c, i) => `<button type="button" data-ink="${c}" style="--c:${c}" aria-pressed="${i === 0}" aria-label="สีที่ ${i + 1}"></button>`).join('');
+
+async function openDraw({ over = null } = {}) {
+  if (!draft || draft.readonly) return;
+  if (!over && draft.images.length >= N.MAX_IMAGES) {
+    toast(`แนบได้ ${N.MAX_IMAGES} รูปต่อโน้ต`);
+    return;
+  }
+  let paper = null;
+  if (over) {
+    const rec = await media.get(over.id).catch(() => null);
+    if (!rec) {
+      toast('รูปนี้ยังไม่อยู่ในเครื่องนี้');
+      return;
+    }
+    paper = await createImageBitmap(rec.blob).catch(() => null);
+    if (!paper) {
+      toast('เปิดรูปนี้ไม่ได้');
+      return;
+    }
+  }
+  drawDialog.showModal();
+  const stage = $('#draw-stage');
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  let w = Math.max(200, stage.clientWidth);
+  let h = Math.max(200, stage.clientHeight);
+  if (paper) {
+    // the paper takes the picture's shape, as large as fits
+    const k = Math.min(w / paper.width, h / paper.height);
+    w = Math.max(1, Math.round(paper.width * k));
+    h = Math.max(1, Math.round(paper.height * k));
+  }
+  drawCanvas.width = Math.round(w * dpr);
+  drawCanvas.height = Math.round(h * dpr);
+  drawCanvas.style.objectFit = 'contain';
+  const ink = Object.assign(document.createElement('canvas'), { width: drawCanvas.width, height: drawCanvas.height });
+  drawing = { strokes: [], redo: [], ...drawPrefs, ink, paper, over, dpr, cur: null, sawPen: false };
+  drawCancelArmed = 0;
+  syncDrawTools();
+  paint();
+}
+
+function syncDrawTools() {
+  for (const b of $$('[data-tool]', drawDialog)) b.setAttribute('aria-pressed', String(b.dataset.tool === drawing.tool));
+  for (const b of $$('[data-ink]', drawDialog)) b.setAttribute('aria-pressed', String(b.dataset.ink === drawing.color));
+  for (const b of $$('[data-size]', drawDialog)) b.setAttribute('aria-pressed', String(Number(b.dataset.size) === drawing.size));
+  $('[data-dact="undo"]', drawDialog).disabled = !drawing.strokes.length;
+  $('[data-dact="redo"]', drawDialog).disabled = !drawing.redo.length;
+}
+
+/** One stroke onto a canvas context (sizes in CSS px, scaled by the canvas's pixel ratio). */
+function inkStroke(g, s, dpr) {
+  if (s.tool === 'clear') {
+    g.clearRect(0, 0, g.canvas.width, g.canvas.height);
+    return;
+  }
+  const pts = s.pts;
+  if (!pts.length) return;
+  g.save();
+  g.lineCap = 'round';
+  g.lineJoin = 'round';
+  g.globalCompositeOperation = s.tool === 'eraser' ? 'destination-out' : 'source-over';
+  g.globalAlpha = s.tool === 'marker' ? 0.32 : 1;
+  g.strokeStyle = g.fillStyle = s.tool === 'eraser' ? '#000' : s.color;
+  const base = (s.tool === 'marker' ? s.size * 3.2 : s.tool === 'eraser' ? s.size * 4 : s.size) * dpr;
+  if (pts.length === 1) {
+    g.beginPath();
+    g.arc(pts[0][0] * dpr, pts[0][1] * dpr, (base * (s.tool === 'pen' ? 0.5 + pts[0][2] : 1)) / 2, 0, Math.PI * 2);
+    g.fill();
+  } else if (s.tool === 'pen') {
+    // the pen's width follows its pressure: one short piece per point, joined at mid-points
+    let px = pts[0][0];
+    let py = pts[0][1];
+    for (let i = 1; i < pts.length; i++) {
+      const [x, y, p] = pts[i];
+      const mx = (pts[i - 1][0] + x) / 2;
+      const my = (pts[i - 1][1] + y) / 2;
+      g.beginPath();
+      g.lineWidth = base * (0.5 + (pts[i - 1][2] + p) / 2);
+      g.moveTo(px * dpr, py * dpr);
+      g.quadraticCurveTo(pts[i - 1][0] * dpr, pts[i - 1][1] * dpr, mx * dpr, my * dpr);
+      g.stroke();
+      px = mx;
+      py = my;
+    }
+    g.beginPath();
+    g.lineWidth = base * (0.5 + pts.at(-1)[2]);
+    g.moveTo(px * dpr, py * dpr);
+    g.lineTo(pts.at(-1)[0] * dpr, pts.at(-1)[1] * dpr);
+    g.stroke();
+  } else {
+    g.lineWidth = base;
+    g.beginPath();
+    g.moveTo(pts[0][0] * dpr, pts[0][1] * dpr);
+    for (let i = 1; i < pts.length; i++) {
+      const mx = (pts[i - 1][0] + pts[i][0]) / 2;
+      const my = (pts[i - 1][1] + pts[i][1]) / 2;
+      g.quadraticCurveTo(pts[i - 1][0] * dpr, pts[i - 1][1] * dpr, mx * dpr, my * dpr);
+    }
+    g.lineTo(pts.at(-1)[0] * dpr, pts.at(-1)[1] * dpr);
+    g.stroke();
+  }
+  g.restore();
+}
+
+/** Paper, then the ink so far, then the stroke being drawn. */
+function paint() {
+  const d = drawing;
+  if (!d) return;
+  const g = drawCanvas.getContext('2d');
+  g.globalCompositeOperation = 'source-over';
+  g.globalAlpha = 1;
+  if (d.paper) g.drawImage(d.paper, 0, 0, drawCanvas.width, drawCanvas.height);
+  else {
+    g.fillStyle = '#fff';
+    g.fillRect(0, 0, drawCanvas.width, drawCanvas.height);
+  }
+  if (d.cur?.tool === 'eraser') {
+    // erasing shows as it happens: on a copy of the ink
+    const tmp = (d.tmp ??= Object.assign(document.createElement('canvas'), { width: d.ink.width, height: d.ink.height }));
+    const t = tmp.getContext('2d');
+    t.clearRect(0, 0, tmp.width, tmp.height);
+    t.drawImage(d.ink, 0, 0);
+    inkStroke(t, d.cur, d.dpr);
+    g.drawImage(tmp, 0, 0);
+  } else {
+    g.drawImage(d.ink, 0, 0);
+    if (d.cur) inkStroke(g, d.cur, d.dpr);
+  }
+}
+
+function replayInk() {
+  const d = drawing;
+  const g = d.ink.getContext('2d');
+  g.clearRect(0, 0, d.ink.width, d.ink.height);
+  for (const s of d.strokes) inkStroke(g, s, d.dpr);
+}
+
+/** A pointer position on the paper, in CSS px of the canvas's own size (it may be letter-boxed). */
+function drawPoint(e) {
+  const r = drawCanvas.getBoundingClientRect();
+  const cw = drawCanvas.width / drawing.dpr;
+  const ch = drawCanvas.height / drawing.dpr;
+  const k = Math.min(r.width / cw, r.height / ch);
+  const ox = (r.width - cw * k) / 2;
+  const oy = (r.height - ch * k) / 2;
+  const pressure = e.pointerType === 'pen' && e.pressure > 0 ? e.pressure : 0.5;
+  return [Math.round(((e.clientX - r.left - ox) / k) * 10) / 10, Math.round(((e.clientY - r.top - oy) / k) * 10) / 10, Math.round(pressure * 100) / 100];
+}
+
+drawCanvas.addEventListener('pointerdown', (e) => {
+  const d = drawing;
+  if (!d || d.cur) return;
+  if (e.pointerType === 'pen') d.sawPen = true;
+  else if (e.pointerType === 'touch' && d.sawPen) return; // the hand resting on the screen while the pen writes
+  e.preventDefault();
+  drawCanvas.setPointerCapture(e.pointerId);
+  // the S Pen's side button (or the eraser end of a pen) erases
+  const tool = e.pointerType === 'pen' && (e.buttons & 32 || e.button === 5 || e.buttons & 2) ? 'eraser' : d.tool;
+  d.cur = { tool, color: d.color, size: d.size, pts: [drawPoint(e)], id: e.pointerId };
+  paint();
+});
+drawCanvas.addEventListener('pointermove', (e) => {
+  const d = drawing;
+  if (!d?.cur || d.cur.id !== e.pointerId) return;
+  for (const ev of e.getCoalescedEvents?.() ?? [e]) {
+    const p = drawPoint(ev);
+    const last = d.cur.pts.at(-1);
+    if (Math.hypot(p[0] - last[0], p[1] - last[1]) >= 0.8) d.cur.pts.push(p);
+  }
+  paint();
+});
+const endStroke = (e) => {
+  const d = drawing;
+  if (!d?.cur || d.cur.id !== e.pointerId) return;
+  const { id, ...stroke } = d.cur;
+  d.cur = null;
+  d.strokes.push(stroke);
+  d.redo = [];
+  inkStroke(d.ink.getContext('2d'), stroke, d.dpr);
+  paint();
+  syncDrawTools();
+};
+drawCanvas.addEventListener('pointerup', endStroke);
+drawCanvas.addEventListener('pointercancel', endStroke);
+
+drawDialog.addEventListener('click', (e) => {
+  const d = drawing;
+  if (!d) return;
+  const tool = e.target.closest('[data-tool]')?.dataset.tool;
+  const ink = e.target.closest('[data-ink]')?.dataset.ink;
+  const size = e.target.closest('[data-size]')?.dataset.size;
+  if (tool) d.tool = tool;
+  if (ink) {
+    d.color = ink;
+    if (d.tool === 'eraser') d.tool = 'pen';
+  }
+  if (size) d.size = Number(size);
+  const act = e.target.closest('[data-dact]')?.dataset.dact;
+  if (act === 'undo' && d.strokes.length) {
+    d.redo.push(d.strokes.pop());
+    replayInk();
+  }
+  if (act === 'redo' && d.redo.length) {
+    const s = d.redo.pop();
+    d.strokes.push(s);
+    inkStroke(d.ink.getContext('2d'), s, d.dpr);
+  }
+  if (act === 'clear' && d.strokes.length) {
+    // clearing is one more step that can be undone
+    d.redo = [];
+    d.strokes.push({ tool: 'clear' });
+    replayInk();
+  }
+  if (tool || ink || size || act === 'undo' || act === 'redo' || act === 'clear') {
+    paint();
+    syncDrawTools();
+  }
+  if (act === 'cancel') {
+    if (d.strokes.length && Date.now() - drawCancelArmed > 4000) {
+      drawCancelArmed = Date.now();
+      toast('แตะ “ยกเลิก” อีกครั้งเพื่อทิ้งภาพวาดนี้');
+      return;
+    }
+    drawDialog.close();
+  }
+  if (act === 'done') finishDraw();
+});
+drawDialog.addEventListener('cancel', (e) => {
+  // Escape / back with ink on the paper: keep the drawing rather than lose it
+  if (drawing?.strokes.length) {
+    e.preventDefault();
+    finishDraw();
+  }
+});
+drawDialog.addEventListener('close', () => {
+  if (!drawing) return;
+  drawing.paper?.close?.();
+  drawPrefs = { tool: drawing.tool, color: drawing.color, size: drawing.size };
+  drawing = null;
+});
+drawDialog.addEventListener('keydown', (e) => {
+  if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'z') return;
+  e.preventDefault();
+  $(`[data-dact="${e.shiftKey ? 'redo' : 'undo'}"]`, drawDialog).click();
+});
+
+async function finishDraw() {
+  const d = drawing;
+  if (!d || d.saving) return;
+  d.saving = true;
+  if (!d.strokes.length) {
+    drawDialog.close();
+    return;
+  }
+  d.cur = null;
+  paint();
+  const target = draft;
+  const [made] = await storeImages([drawCanvas], { png: !d.paper });
+  drawDialog.close();
+  if (!made || !target || draft !== target) return;
+  const at = d.over ? draft.images.findIndex((x) => x.id === d.over.id) : -1;
+  if (at >= 0) draft.images.splice(at, 1, made);
+  else draft.images.push(made);
+  renderDraftImages();
+  saveDraft();
+}
+
 
 // ---------------------------------------------------------------------------
 // Task dialog
@@ -1625,7 +2760,9 @@ document.addEventListener('click', async (e) => {
     toast(removed ? `ล้าง ${removed} เรื่องแล้ว` : 'ไม่มีเรื่องที่ต้องล้าง', removed ? { label: 'เลิกทำ', run: undo } : undefined);
   }
   if (item === 'export') {
-    await shareFile(`paewai-${today}.json`, JSON.stringify(state, null, 1), 'application/json');
+    const pics = await backupMedia();
+    await shareFile(`paewai-${today}.json`, JSON.stringify(pics.count ? { ...state, media: pics.media } : state, null, 1), 'application/json');
+    if (pics.left) toast(`สำรองแล้ว แต่รูปอีก ${pics.left} รูปไม่ได้อยู่ในไฟล์ (ใหญ่เกินไป หรือยังไม่อยู่ในเครื่องนี้)`);
   }
   if (item === 'import') $('#import-file').click();
 });
@@ -1635,8 +2772,10 @@ $('#import-file').addEventListener('change', async (e) => {
   e.target.value = '';
   if (!file) return;
   let next = null;
+  let raw = null;
   try {
-    next = S.sanitize(JSON.parse(await file.text()));
+    raw = JSON.parse(await file.text());
+    next = S.sanitize(raw);
   } catch {
     next = null;
   }
@@ -1646,14 +2785,62 @@ $('#import-file').addEventListener('change', async (e) => {
   }
   const { state: merged, added } = S.restoreFrom(state, next);
   menu.close();
+  const pics = await restoreMedia(raw?.media, N.imagesOf(merged.memos));
   if (!added) {
-    toast('ทุกอย่างในไฟล์สำรองมีอยู่แล้ว');
+    toast(pics ? `กู้คืนรูป ${pics} รูปแล้ว` : 'ทุกอย่างในไฟล์สำรองมีอยู่แล้ว');
+    if (pics) renderNotes();
     return;
   }
   commit(merged, { undoable: true });
   syncNote();
   toast(`กู้คืน ${added} รายการที่หายไป (ของที่มีอยู่ไม่ถูกแตะ)`, { label: 'เลิกทำ', run: undo });
 });
+
+const BACKUP_MEDIA_MAX = 40_000_000; // bytes of pictures in one backup file
+
+/** The notes' pictures for a backup file: { media: { id: 'data:image/…;base64,…' }, count, left }. */
+async function backupMedia() {
+  const out = { media: {}, count: 0, left: 0 };
+  let size = 0;
+  for (const id of N.imagesOf(state.memos).keys()) {
+    const rec = await media.get(id).catch(() => null);
+    if (!rec || size + rec.blob.size > BACKUP_MEDIA_MAX) {
+      out.left++;
+      continue;
+    }
+    size += rec.blob.size;
+    out.media[id] = await new Promise((ok) => {
+      const reader = new FileReader();
+      reader.onload = () => ok(String(reader.result));
+      reader.onerror = () => ok('');
+      reader.readAsDataURL(rec.blob);
+    });
+    if (out.media[id]) out.count++;
+    else {
+      delete out.media[id];
+      out.left++;
+    }
+  }
+  return out;
+}
+
+/** Puts back the pictures of a backup file that the notes use and this device lacks. → how many */
+async function restoreMedia(pics, need) {
+  if (!pics || typeof pics !== 'object') return 0;
+  const local = await media.keys().catch(() => new Set());
+  let n = 0;
+  for (const [id, url] of Object.entries(pics)) {
+    if (!need.has(id) || local.has(id) || typeof url !== 'string' || !url.startsWith('data:image/')) continue;
+    try {
+      const blob = await (await fetch(url)).blob();
+      await adopt(id, await bytesOf(blob), blob.type);
+      n++;
+    } catch {
+      // a damaged picture: the note stays, without it
+    }
+  }
+  return n;
+}
 
 /** Saves a file: the share sheet where it can take files, else a download. */
 async function shareFile(name, text, type) {
@@ -1883,6 +3070,7 @@ function runSync({ manual = false } = {}) {
       syncCfg = { ...syncCfg, lastSync: Date.now(), error: '', errorAt: 0 };
       saveSyncCfg();
       if (res.inbox) toast(`รับ ${res.inbox} เรื่องที่ส่งมาจากคำสั่งลัดหรือ Claude แล้ว`);
+      syncMedia(); // the notes are in the repo: now their pictures
     })
     .catch((err) => {
       if (syncCfg?.token !== cfg.token) return;
@@ -1899,6 +3087,112 @@ function runSync({ manual = false } = {}) {
     });
   renderSyncStatus();
   return syncing;
+}
+
+// ---- the pictures of notes: media/<id>.jpg in the same repo, a few each pass ----
+
+const MEDIA_KEY = 'paewai:media'; // ids this device knows are in the repo
+const mediaKnown = (() => {
+  try {
+    const v = JSON.parse(localStorage.getItem(MEDIA_KEY) ?? '[]');
+    return new Set(Array.isArray(v) ? v.filter((x) => typeof x === 'string') : []);
+  } catch {
+    return new Set();
+  }
+})();
+const mediaMissed = new Map(); // id → when the repo did not have it yet (asked again after ten minutes)
+let mediaBusy = null;
+let mediaWanted = 0;
+
+function saveMediaKnown() {
+  try {
+    localStorage.setItem(MEDIA_KEY, JSON.stringify([...mediaKnown]));
+  } catch {
+    // storage blocked
+  }
+}
+
+/** A card found its picture missing on this device: fetch it soon. */
+function wantMedia() {
+  if (!syncCfg || mediaWanted) return;
+  mediaWanted = setTimeout(() => {
+    mediaWanted = 0;
+    syncMedia();
+  }, 1200);
+}
+
+/**
+ * Sends the pictures the repo lacks, fetches the ones this device lacks, and removes from the
+ * repo those no note uses any more (lib/notes.js mediaPlan). Runs after the notes themselves
+ * are in the repo, so a picture there always has its note.
+ */
+function syncMedia() {
+  const cfg = syncCfg;
+  if (!cfg || navigator.onLine === false) return Promise.resolve();
+  if (mediaBusy) return mediaBusy;
+  const work = async () => {
+    const gh = new GitHubRepo(cfg);
+    const need = N.imagesOf(state.memos);
+    const local = await media.keys();
+    const now = Date.now();
+    const plan = N.mediaPlan({ need, local, known: mediaKnown });
+    let got = 0;
+    for (const img of plan.upload) {
+      const rec = await media.get(img.id);
+      if (!rec) continue;
+      try {
+        await gh.writeBytes(N.mediaPath(img), await bytesOf(rec.blob), null, 'แปะไว้: รูปของโน้ต');
+      } catch (err) {
+        if (!isConflict(err)) throw err; // 409/422: it is there already
+      }
+      mediaKnown.add(img.id);
+    }
+    for (const img of plan.download) {
+      if (now - (mediaMissed.get(img.id) ?? 0) < 600_000) continue;
+      const file = await gh.readBytes(N.mediaPath(img));
+      if (!file) {
+        mediaMissed.set(img.id, now); // its device has not sent it yet
+        continue;
+      }
+      await adopt(img.id, file.bytes, img.t === 'png' ? 'image/png' : 'image/jpeg');
+      mediaKnown.add(img.id);
+      got++;
+    }
+    if (plan.remove.length) {
+      const files = await gh.list(N.MEDIA_DIR);
+      for (const id of plan.remove) {
+        const f = files.find((x) => x.name.startsWith(`${id}.`));
+        if (f) await gh.remove(f.path, f.sha, 'แปะไว้: ลบรูปที่ไม่ใช้แล้ว');
+        mediaKnown.delete(id);
+      }
+    }
+    if (got) {
+      $('#memos').dataset.html = '';
+      renderNotes();
+      if (draft && noteDialog.open) renderDraftImages();
+    }
+    return plan.more && (plan.upload.length || got || plan.remove.length);
+  };
+  mediaBusy = work()
+    .then((more) => {
+      if (more) setTimeout(syncMedia, 500);
+    })
+    .catch((err) => console.warn('media sync', err?.message ?? err))
+    .finally(() => {
+      mediaBusy = null;
+      saveMediaKnown();
+    });
+  return mediaBusy;
+}
+
+/** Start-up housekeeping: the bin empties itself after a week, and pictures no note uses are freed. */
+function tidyNotes() {
+  if (!storageReady) return;
+  const next = S.emptyOldTrash(state);
+  if (next !== state) commit(next);
+  // only with real data in hand: an unreadable state must never look like "no note uses these"
+  if (!(state.tasks.length || state.memos.length || state.recs.length)) return;
+  media.sweep(new Set(N.imagesOf(state.memos).keys())).catch(() => {});
 }
 
 /** Takes in what the sync brought. Edits made here while it ran are newer and stay (the next sync sends them). */
@@ -3133,6 +4427,7 @@ function renderRecView() {
   $('[data-rv="transcribe"] span').textContent = job?.kind === 'stt' ? 'กำลังถอด…' : onDevice ? 'ถอดด้วยระบบของเครื่อง' : 'ถอดเสียง';
   renderMarks(r);
   renderTextBar();
+  renderFind();
   // Summary
   const sum = $('#rv-sum');
   $('#rv-sum-empty').hidden = !!r.summary && job?.kind !== 'claude';
@@ -3340,6 +4635,71 @@ function renderTextBar() {
   $('#rv-here').textContent = focused ? `${exact ? '' : 'ประมาณ '}${V.clock(ms)}` : 'แตะในข้อความ แล้วกดเล่นจากตรงนั้น';
 }
 for (const ev of ['click', 'keyup', 'select', 'focus']) $('#rv-text').addEventListener(ev, () => renderTextBar());
+
+// ---- search inside the transcript: every place a word was said, with its time ----
+
+let rvHits = { q: '', at: [], i: 0 };
+
+function renderFind() {
+  const r = findRec(rvId);
+  const has = (r?.transcript?.length ?? 0) > 200;
+  $('#rv-find').hidden = !has;
+  // the summary's key words, one tap to find where each was said
+  const keys = has ? (/\*\*คำสำคัญ:\*\*\s*(.+)/.exec(r.summary ?? '')?.[1] ?? '').split(' · ').map((k) => k.trim()).filter(Boolean).slice(0, 10) : [];
+  const box = $('#rv-keys');
+  box.hidden = !keys.length;
+  const html = keys.map((k) => `<button type="button" class="chip${k.toLowerCase() === rvHits.q ? ' on' : ''}" data-key="${esc(k)}">${esc(k)}</button>`).join('');
+  if (box.innerHTML !== html) box.innerHTML = html;
+  if (!has || !rvHits.q) $('#rv-hit').hidden = true;
+}
+
+function findInText(q, step = 0) {
+  const r = findRec(rvId);
+  const text = r?.transcript ?? '';
+  const low = text.toLowerCase();
+  const needle = q.trim().toLowerCase();
+  if (needle !== rvHits.q || rvHits.id !== rvId) {
+    const at = [];
+    if (needle) for (let i = low.indexOf(needle); i >= 0 && at.length < 2000; i = low.indexOf(needle, i + needle.length)) at.push(i);
+    rvHits = { q: needle, at, i: 0, id: rvId };
+  } else if (rvHits.at.length) rvHits.i = (rvHits.i + step + rvHits.at.length) % rvHits.at.length;
+  const n = rvHits.at.length;
+  $('#rv-find-count').textContent = needle ? (n ? `${rvHits.i + 1}/${n}` : 'ไม่เจอ') : '';
+  for (const b of $$('[data-rv="find-prev"], [data-rv="find-next"]')) b.disabled = n < 2;
+  for (const c of $$('#rv-keys .chip')) c.classList.toggle('on', c.dataset.key.toLowerCase() === needle);
+  const hit = $('#rv-hit');
+  hit.hidden = !n;
+  if (!n) return;
+  const pos = rvHits.at[rvHits.i];
+  const ms = r.times?.length ? S.timeAt(r.times, pos) : -1;
+  const from = Math.max(0, pos - 40);
+  hit.dataset.ms = String(ms);
+  hit.innerHTML = `${ms >= 0 ? `<b>${V.clock(ms)}</b>` : ''}<span>${from ? '…' : ''}${esc(text.slice(from, pos))}<mark>${esc(text.slice(pos, pos + needle.length))}</mark>${esc(text.slice(pos + needle.length, pos + needle.length + 70))}…</span>`;
+  // bring that place into view in the text below
+  const ta = $('#rv-text');
+  const full = ta.value;
+  if (full === text) {
+    ta.value = full.slice(0, pos);
+    const top = ta.scrollHeight;
+    ta.value = full;
+    ta.scrollTop = Math.max(0, top - ta.clientHeight / 2);
+    ta.setSelectionRange(pos, pos + needle.length);
+    renderTextBar();
+  }
+}
+
+$('#rv-find-q').addEventListener('input', (e) => findInText(e.target.value));
+$('#rv-find-q').addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter') return;
+  e.preventDefault();
+  findInText(e.target.value, e.shiftKey ? -1 : 1);
+});
+$('#rv-keys').addEventListener('click', (e) => {
+  const key = e.target.closest('[data-key]')?.dataset.key;
+  if (!key) return;
+  $('#rv-find-q').value = key;
+  findInText(key, 1);
+});
 
 recview.addEventListener('close', () => {
   player.pause();
@@ -3692,6 +5052,14 @@ recview.addEventListener('click', async (e) => {
     player.playbackRate = next;
     e.target.closest('[data-rv]').textContent = `${next}×`;
   }
+  if (act === 'find-prev' || act === 'find-next') findInText($('#rv-find-q').value, act === 'find-next' ? 1 : -1);
+  if (act === 'hit-play') {
+    const ms = Number($('#rv-hit').dataset.ms);
+    if (ms >= 0 && rvUrls.length) {
+      seekTo(ms);
+      toast(`เล่นจาก ${V.clock(ms)}`);
+    } else toast(rvUrls.length ? 'ช่วงนี้ไม่มีเวลากำกับ' : 'ไฟล์เสียงไม่อยู่ในเครื่องนี้');
+  }
   if (act === 'transcribe') transcribeRec(r.id);
   if (act === 'settings') openClaude('', { settings: true });
   if (act === 'analyze') analyzeRec(r.id);
@@ -3787,8 +5155,8 @@ $('#rv-menu').addEventListener('click', async (e) => {
   if (act === 'copy') copyText(r.transcript);
   if (act === 'export') shareFile(`${r.title.replace(/[\\/:*?"<>|]/g, ' ').slice(0, 60)}.txt`, recText(r), 'text/plain');
   if (act === 'memo') {
-    commit(S.addMemo(state, `${r.title}\n${r.summary}`), { undoable: true });
-    toast('เก็บสรุปเป็นโน้ตย่อแล้ว', { label: 'เลิกทำ', run: undo });
+    commit(S.addMemo(state, { title: r.title, text: r.summary.replace(/\*\*(.+?)\*\*/g, '$1'), labels: ['บันทึกเสียง'] }), { undoable: true });
+    toast('เก็บสรุปเป็นโน้ตแล้ว', { label: 'เลิกทำ', run: undo });
   }
   if (act === 'share') {
     const blobs = await audioParts(r);
@@ -3850,14 +5218,16 @@ function renderMapTools(sel) {
 function memoToMap(id) {
   const memo = state.memos.find((m) => m.id === id);
   if (!memo) return;
-  const text = memo.text.trim();
+  // a checklist is a list of branches; other notes are read like a recording
+  const text = (memo.list ? N.listItems(memo.text).map((it) => `- ${it.text}`).join('\n') : memo.text).trim();
   const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
   const BULLET = /^(?:[-*+•]|\d{1,3}[.)]|#{1,6})\s/;
-  const head = lines.length > 1 && lines[0].length <= 60 && !BULLET.test(lines[0]) ? lines[0] : '';
+  const first = !memo.title && lines.length > 1 && lines[0].length <= 60 && !BULLET.test(lines[0]) ? lines[0] : '';
+  const head = memo.title || first;
   let map;
-  if (lines.filter((l) => BULLET.test(l)).length >= 2) map = Mm.fromOutline(text, head || 'โน้ตย่อ');
+  if (lines.filter((l) => BULLET.test(l)).length >= 2) map = Mm.fromOutline(text, head || 'โน้ต');
   else {
-    const a = Sum.analyze(head ? lines.slice(1).join('\n') : text, { title: head || 'โน้ตย่อ', now: memo.updatedAt ?? Date.now() });
+    const a = Sum.analyze(first ? lines.slice(1).join('\n') : text, { title: head || 'โน้ต', now: memo.updatedAt ?? Date.now() });
     if (!a) {
       toast('ข้อความสั้นเกินไปที่จะทำมายด์แมป');
       return;
@@ -3890,7 +5260,10 @@ mapDialog.addEventListener('click', (e) => {
   if (act === 'fold') mapView.toggle();
   if (act === 'delete') mapView.remove();
   if (act === 'fit') mapView.fit();
-  if (act === 'more') $('#mm-menu').showModal();
+  if (act === 'more') {
+    $('[data-mmm="layout"]').textContent = state.maps.find((m) => m.id === mapId)?.layout === 'right' ? 'จัดกิ่งสองข้าง' : 'จัดกิ่งไปทางขวาทั้งหมด';
+    $('#mm-menu').showModal();
+  }
 });
 
 mapDialog.addEventListener('close', () => {
@@ -3930,6 +5303,12 @@ $('#mm-menu').addEventListener('click', async (e) => {
     }
   }
   if (act === 'copy') copyText(Mm.toOutline(map), 'คัดลอกโครงร่างแล้ว');
+  if (act === 'layout') {
+    const { layout, ...rest } = map;
+    const next = { ...rest, ...(layout === 'right' ? {} : { layout: 'right' }), updatedAt: Date.now() };
+    commit(S.saveMap(state, next));
+    mapView.set(next, { fit: true });
+  }
   if (act === 'paste') {
     $('#paste-form').outline.value = '';
     $('#paste-dialog').showModal();
@@ -3969,6 +5348,9 @@ $('#view-notes').addEventListener('click', (e) => {
   const create = e.target.closest('[data-create]')?.dataset.create;
   if (create === 'record') startRecording();
   if (create === 'map') newMindMap();
+  if (create === 'note') openNote();
+  if (create === 'list') openNote(null, { list: true });
+  if (create === 'draw' || create === 'image' || create === 'camera') openNote(null, { then: create });
   const rec = e.target.closest('[data-rec-id]')?.dataset.recId;
   if (rec) openRec(rec);
   const map = e.target.closest('[data-map-id]')?.dataset.mapId;
@@ -4085,7 +5467,30 @@ window.paewai = {
   toast(message) {
     toast(message);
   },
+  /** Pictures shared to the Android app (served to the page at these addresses): a new note with them. */
+  importImages(urls, text = '') {
+    importShared(urls, text);
+  },
+  openNote(id) {
+    setView('notes');
+    openNote(id ? String(id) : null);
+  },
 };
+
+async function importShared(urls, text) {
+  {
+    const files = [];
+    for (const url of [].concat(urls ?? []).slice(0, N.MAX_IMAGES)) {
+      try {
+        const blob = await (await fetch(String(url))).blob();
+        files.push(new File([blob], 'shared', { type: /^image\//.test(blob.type) ? blob.type : 'image/jpeg' }));
+      } catch {
+        // skip what cannot be read
+      }
+    }
+    if (!(await noteFromImages(files, { text: String(text ?? '') }))) toast('เปิดรูปที่แชร์มาไม่ได้');
+  }
+}
 
 $('#version').textContent = `เวอร์ชัน ${VERSION}`;
 render();
@@ -4101,6 +5506,7 @@ renderSyncStatus();
 scheduleSync(800);
 recoverRecordings();
 syncNativeRecordings();
+setTimeout(tidyNotes, 8000);
 
 if (!android && 'serviceWorker' in navigator && location.protocol.startsWith('http')) {
   navigator.serviceWorker.register('sw.js').catch(() => {});

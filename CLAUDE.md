@@ -26,6 +26,10 @@ computer and writes in Thai; reply in Thai.
     (`src/lib/mindmap.js`, `src/mapview.js`; nodes may carry `at` ms to play from); Claude is optional.
     Recordings keep bookmarks (`marks`, ms) and word times (`times`, [char offset, ms]); when the state
     outgrows localStorage it moves to IndexedDB (`paewai-state`, flag key `paewai:v1:idb`).
+    Notes are cards on a board (`src/lib/notes.js`; still the `memos` list): title, colour, labels,
+    checklist (`list: true`, lines "[ ] x" / "[x] y"), archive, a 7-day bin, and pictures. A note holds
+    only `images: [{ id, w, h }]`; the files live in IndexedDB (`src/lib/media.js`, `paewai-media`) and
+    in the sync repo as `media/<id>.jpg|png`, sent after the JSON so a picture there always has its note.
     The font is Sarabun, shipped in `src/fonts/` (OFL).
   - `apps/paewai-notch/`: the same แปะไว้ as an Android app (Java, Gradle in `android/`) with a pill
     over the camera notch (accessibility overlay) and a drop-down panel; it bundles `../paewai/src`

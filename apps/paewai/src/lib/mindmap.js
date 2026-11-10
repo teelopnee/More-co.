@@ -67,6 +67,7 @@ export function sanitizeMap(raw) {
     id: typeof raw.id === 'string' && raw.id ? raw.id : uid(),
     nodes,
     source: raw.source && typeof raw.source === 'object' && typeof raw.source.id === 'string' ? { kind: String(raw.source.kind ?? ''), id: raw.source.id } : null,
+    ...(raw.layout === 'right' ? { layout: 'right' } : {}), // every branch to the right (a logic chart); else both sides
     createdAt: when(raw.createdAt),
     updatedAt: when(raw.updatedAt ?? raw.createdAt),
   };
@@ -295,6 +296,7 @@ export function layoutMap(map, measure, { gapX = 56, gapY = 14 } = {}) {
     }
   }
   if (!left.length && right.length > 3) left.push(...right.splice(Math.ceil(right.length / 2)));
+  if (map.layout === 'right') right.push(...left.splice(0));
 
   const rs = sizes.get(root.id);
   out.set(root.id, { id: root.id, text: root.text, lines: rs.lines, x: 0, y: 0, w: rs.w, h: rs.h, depth: 0, side: 0, color: '', parent: null, folded: !!root.collapsed && (kids.get(root.id)?.length ?? 0) });

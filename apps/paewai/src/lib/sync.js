@@ -277,7 +277,7 @@ export const DATA_GUIDE = `# แปะไว้ — ข้อมูล
 - \`tasks\`: งานและเตือน \`{ id, text, day: "YYYY-MM-DD" | null, time: "HH:MM" | null, done, doneAt, createdAt, updatedAt, repeat, streak }\`
   - \`day: null\` = อยู่ในกล่องรับ
   - \`repeat\`: \`daily\`, \`weekdays\`, \`weekly:0-6\` (0 = อาทิตย์), \`monthly:1-31\`, \`yearly\` หรือ \`null\`
-- \`memos\`: โน้ตย่อ \`{ id, text, pinned, createdAt, updatedAt }\`
+- \`memos\`: โน้ต \`{ id, text, pinned, createdAt, updatedAt }\` และถ้ามี \`title\`, \`color\`, \`labels: [..]\`, \`list: true\` (รายการติ๊ก: บรรทัดละข้อ \`[ ] นม\` / \`[x] ไข่\`), \`images: [{ id, w, h }]\` (ไฟล์อยู่ที่ \`media/<id>.jpg\` หรือ \`.png\`), \`archived: true\`, \`trashedAt\` (อยู่ในถังขยะ ลบถาวรหลัง 7 วัน)
 - \`shop\`: ของต้องซื้อ \`{ id, text, cat, done, doneAt, createdAt, updatedAt }\`
 - \`money\`: รายจ่าย \`{ id, text, amount (บาท), cat, at, updatedAt }\`
 - \`recs\`: บันทึกเสียง \`{ id, title, at, durationMs, transcript, summary, mapId, device, marks, times }\` (marks = จุดที่ปักหมุดเป็นมิลลิวินาที, times = [ตำแหน่งตัวอักษร, มิลลิวินาที]; ไฟล์เสียงอยู่ในเครื่องที่อัด ไม่อยู่ใน repo)

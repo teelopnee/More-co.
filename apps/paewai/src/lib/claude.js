@@ -9,6 +9,7 @@ import { addDays, describeWhen, longDate, repeatLabel } from './dates.js';
 import { KIND_LABELS } from './sort.js';
 import { moneySummary, sortedMemos, taskViews } from './store.js';
 import { childrenOf, rootOf, sanitizeMap } from './mindmap.js';
+import { noteText } from './notes.js';
 import { clock } from './voice.js';
 
 export const CLAUDE_KEY = 'paewai:claude';
@@ -54,7 +55,7 @@ export function contextFor(state, today, now = Date.now(), { limit = 6000 } = {}
       ...m.days.slice(0, 3).flatMap((d) => d.items.slice(0, 6).map((e) => `- ${d.day}: ${e.text} ${baht(e.amount)}`)),
     ]);
   }
-  section('โน้ตย่อ', sortedMemos(state).slice(0, 12).map((m) => `- ${m.pinned ? '📌 ' : ''}${clip(m.text, 160)}`));
+  section('โน้ต', sortedMemos(state).slice(0, 12).map((m) => `- ${m.pinned ? '📌 ' : ''}${clip(noteText(m), 160)}`));
   const days = Object.keys(state.notes).filter((d) => d >= since && d <= today).sort().reverse();
   section('บันทึกประจำวัน (7 วัน)', days.map((d) => `- ${d}: ${clip(state.notes[d], 500)}`));
   let text = lines.join('\n');

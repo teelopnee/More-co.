@@ -23,19 +23,21 @@ export function explain(err) {
   return err.message || 'ซิงก์ไม่สำเร็จ';
 }
 
-export function toBase64(text) {
-  const bytes = new TextEncoder().encode(text);
+export function bytesToBase64(bytes) {
   let bin = '';
   for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
   return btoa(bin);
 }
 
-export function fromBase64(b64) {
+export function base64ToBytes(b64) {
   const bin = atob(String(b64).replace(/\s/g, ''));
   const bytes = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return new TextDecoder().decode(bytes);
+  return bytes;
 }
+
+export const toBase64 = (text) => bytesToBase64(new TextEncoder().encode(text));
+export const fromBase64 = (b64) => new TextDecoder().decode(base64ToBytes(b64));
 
 const encodePath = (path) => path.split('/').map(encodeURIComponent).join('/');
 
@@ -76,26 +78,42 @@ export class GitHubRepo {
     return { private: !!r.private, canWrite: r.permissions ? !!r.permissions.push : true, defaultBranch: r.default_branch, fullName: r.full_name };
   }
 
-  /** The file's text and sha, or null when it does not exist. */
-  async read(path) {
+  /** The file's sha and content (base64), or null when it does not exist. */
+  async readRaw(path) {
     try {
       const r = await this.request('GET', `/repos/${this.repo}/contents/${encodePath(path)}`);
       if (Array.isArray(r) || r.type !== 'file') throw new GitHubError(422, `${path} is not a file`);
-      if (r.content && r.encoding === 'base64') return { sha: r.sha, text: fromBase64(r.content) };
+      if (r.content && r.encoding === 'base64') return { sha: r.sha, content: r.content };
       // Files over 1 MB come without content: fetch the blob.
       const blob = await this.request('GET', `/repos/${this.repo}/git/blobs/${r.sha}`);
-      return { sha: r.sha, text: fromBase64(blob.content) };
+      return { sha: r.sha, content: blob.content };
     } catch (err) {
       if (err.status === 404) return null;
       throw err;
     }
   }
 
+  /** The file's text and sha, or null when it does not exist. */
+  async read(path) {
+    const r = await this.readRaw(path);
+    return r && { sha: r.sha, text: fromBase64(r.content) };
+  }
+
+  /** A binary file (a note's picture): { sha, bytes }, or null. */
+  async readBytes(path) {
+    const r = await this.readRaw(path);
+    return r && { sha: r.sha, bytes: base64ToBytes(r.content) };
+  }
+
   /** Creates or replaces a file. `sha` must be the current one (null for a new file); 409/422 = someone wrote first. */
   async write(path, text, sha, message) {
+    return this.writeBytes(path, new TextEncoder().encode(text), sha, message);
+  }
+
+  async writeBytes(path, bytes, sha, message) {
     const r = await this.request('PUT', `/repos/${this.repo}/contents/${encodePath(path)}`, {
       message,
-      content: toBase64(text),
+      content: bytesToBase64(bytes),
       ...(sha ? { sha } : {}),
     });
     return { sha: r.content.sha };

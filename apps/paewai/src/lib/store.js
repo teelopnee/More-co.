@@ -4,6 +4,7 @@
 import { addDays, dayKey, diffDays, isRepeat, nextOccurrence, toTimestamp } from './dates.js';
 import { MONEY_CATS, SHOP_SECTIONS, shopSection } from './sort.js';
 import { mapText, sanitizeMap } from './mindmap.js';
+import { cleanExtras, expired, isEmptyNote, noteText, visibleNotes } from './notes.js';
 
 export const STORAGE_KEY = 'paewai:v1';
 export const FOCUS_PRESETS = [5, 15, 25, 50];
@@ -72,8 +73,10 @@ export function sanitize(raw) {
   };
   const when = (v) => (Number.isFinite(v) ? v : Date.now());
   for (const m of Array.isArray(raw.memos) ? raw.memos : []) {
-    if (!m || typeof m.text !== 'string' || !m.text.trim()) continue;
-    state.memos.push({ id: freshId(m.id), text: m.text.slice(0, 20_000), pinned: !!m.pinned, createdAt: when(m.createdAt), updatedAt: when(m.updatedAt ?? m.createdAt) });
+    if (!m || typeof m.text !== 'string') continue;
+    const extras = cleanExtras(m);
+    if (isEmptyNote({ ...extras, text: m.text })) continue;
+    state.memos.push({ id: freshId(m.id), text: m.text.slice(0, 20_000), pinned: !!m.pinned, ...extras, createdAt: when(m.createdAt), updatedAt: when(m.updatedAt ?? m.createdAt) });
   }
   for (const i of Array.isArray(raw.shop) ? raw.shop : []) {
     if (!i || typeof i.text !== 'string' || !i.text.trim()) continue;
@@ -345,19 +348,35 @@ export function exportText(state, today, describe) {
 }
 
 // ---------------------------------------------------------------------------
-// Quick notes (Keep-style cards)
+// Notes (cards on a board, lib/notes.js): text or a checklist, with an optional title, colour,
+// labels and pictures; pinned, archived, or in the bin for a week
 
-export function addMemo(state, text, now = Date.now()) {
-  const clean = String(text ?? '').trim();
-  if (!clean) return state;
-  return { ...state, memos: [{ id: uid(now), text: clean, pinned: false, createdAt: now, updatedAt: now }, ...state.memos] };
+/** `note`: the text, or { text, title, color, labels, images, list, pinned }. An id may be given. */
+export function addMemo(state, note, now = Date.now()) {
+  const n = typeof note === 'string' ? { text: note } : note ?? {};
+  const text = String(n.text ?? '').trim().slice(0, 20_000);
+  const extras = cleanExtras({ ...n, archived: false, trashedAt: 0 });
+  if (isEmptyNote({ ...extras, text })) return state;
+  const id = typeof n.id === 'string' && n.id && !state.memos.some((m) => m.id === n.id) ? n.id : uid(now);
+  return { ...state, memos: [{ id, text, pinned: !!n.pinned, ...extras, createdAt: now, updatedAt: now }, ...state.memos] };
 }
 
-export function editMemo(state, id, text, now = Date.now()) {
-  const clean = String(text ?? '').trim();
-  if (!clean) return deleteMemo(state, id);
-  return { ...state, memos: state.memos.map((m) => (m.id === id ? { ...m, text: clean, updatedAt: now } : m)) };
+/** Changes fields of a note (text, title, color, labels, images, list, pinned, archived); empty notes are deleted. */
+export function patchMemo(state, id, changes, now = Date.now()) {
+  const cur = state.memos.find((m) => m.id === id);
+  if (!cur) return state;
+  const merged = { ...cur, ...changes };
+  const text = String(merged.text ?? '').trim().slice(0, 20_000);
+  const extras = cleanExtras(merged);
+  if (isEmptyNote({ ...extras, text })) return deleteMemo(state, id);
+  const next = { id: cur.id, text, pinned: !!merged.pinned, ...extras, createdAt: cur.createdAt, updatedAt: now };
+  // nothing changed: keep the note (and its place in the list) as it is
+  const same = (a, b) => JSON.stringify({ ...a, updatedAt: 0 }) === JSON.stringify({ ...b, updatedAt: 0 });
+  if (same(cur, next)) return state;
+  return { ...state, memos: state.memos.map((m) => (m.id === id ? next : m)) };
 }
+
+export const editMemo = (state, id, text, now = Date.now()) => patchMemo(state, id, { text }, now);
 
 export function pinMemo(state, id) {
   return { ...state, memos: state.memos.map((m) => (m.id === id ? { ...m, pinned: !m.pinned } : m)) };
@@ -367,9 +386,42 @@ export function deleteMemo(state, id) {
   return { ...state, memos: state.memos.filter((m) => m.id !== id) };
 }
 
-/** Pinned first, then newest. */
+/** To the bin (kept for a week), or back out of it. */
+export function trashMemo(state, id, now = Date.now()) {
+  return { ...state, memos: state.memos.map((m) => (m.id === id ? { ...m, trashedAt: now, pinned: false } : m)) };
+}
+
+export function restoreMemo(state, id, now = Date.now()) {
+  return {
+    ...state,
+    memos: state.memos.map((m) => {
+      if (m.id !== id) return m;
+      const { trashedAt, archived, ...rest } = m;
+      return { ...rest, updatedAt: now };
+    }),
+  };
+}
+
+export function archiveMemo(state, id, on = true) {
+  return {
+    ...state,
+    memos: state.memos.map((m) => {
+      if (m.id !== id) return m;
+      const { archived, ...rest } = m;
+      return on ? { ...rest, archived: true, pinned: false } : rest;
+    }),
+  };
+}
+
+/** Deletes for good what has been in the bin for more than a week. */
+export function emptyOldTrash(state, now = Date.now()) {
+  const old = new Set(expired(state.memos, now));
+  return old.size ? { ...state, memos: state.memos.filter((m) => !old.has(m.id)) } : state;
+}
+
+/** The notes on the board (not archived, not in the bin): pinned first, then newest. */
 export function sortedMemos(state) {
-  return [...state.memos].sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt);
+  return visibleNotes(state.memos);
 }
 
 // ---------------------------------------------------------------------------
@@ -611,7 +663,7 @@ export function search(state, query) {
     recs: sortedRecs(state).filter((r) => has(r.title) || has(r.transcript) || has(r.summary)).slice(0, 30),
     maps: sortedMaps(state).filter((m) => has(mapText(m))).slice(0, 30),
     tasks: state.tasks.filter((t) => has(t.text)).slice(0, 50),
-    memos: sortedMemos(state).filter((m) => has(m.text)).slice(0, 50),
+    memos: [...visibleNotes(state.memos), ...visibleNotes(state.memos, { filter: 'archive' })].filter((m) => has(noteText(m))).slice(0, 50),
     notes: Object.entries(state.notes)
       .filter(([, text]) => has(text))
       .sort((a, b) => b[0].localeCompare(a[0]))
