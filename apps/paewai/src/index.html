@@ -644,6 +644,27 @@
           <button type="button" class="secondary" data-battery="ask">ให้แปะไว้ทำงานเบื้องหลังได้</button>
         </div>
       </div>
+      <h3>AI ช่วยเกลาข้อความและสรุป (ไม่จำเป็น)</h3>
+      <p class="dim small">ปกติแอปถอดเสียง จัดวรรคตอน สรุป และทำมายด์แมปเองในเครื่อง ไม่ใช้ AI ถ้าอยากให้แม่นขึ้น ใส่คีย์ของคุณเองได้: AI จะแก้คำที่ถอดผิดจากบริบท และสรุปพร้อมมายด์แมปให้
+        ข้อความที่ถอดจะถูกส่งไปที่บริการที่เลือก เฉพาะตอนที่คุณกดใช้</p>
+      <label class="field"><span>ใช้</span>
+        <select id="ai-provider">
+          <option value="">ไม่ใช้ AI</option>
+          <option value="gemini">Google Gemini (ใช้คีย์)</option>
+          <option value="openrouter">OpenRouter (ใช้คีย์ เลือกรุ่นได้)</option>
+        </select>
+      </label>
+      <div id="ai-gemini" hidden>
+        <label class="field"><span>คีย์ Gemini</span><input id="ai-gemini-key" type="password" placeholder="AIza…" autocomplete="off" spellcheck="false"></label>
+        <p class="dim small">คีย์เดียวกับที่ใช้ถอดเสียงด้วย Gemini · สร้างที่ <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a> · โควตาฟรีของ Gemini นำข้อมูลไปพัฒนาโมเดล</p>
+      </div>
+      <div id="ai-openrouter" hidden>
+        <label class="field"><span>คีย์ OpenRouter</span><input id="ai-openrouter-key" type="password" placeholder="sk-or-…" autocomplete="off" spellcheck="false"></label>
+        <label class="field"><span>รุ่น</span><input id="ai-openrouter-model" type="text" list="ai-models" placeholder="เลือกหรือพิมพ์ชื่อรุ่น" autocomplete="off" spellcheck="false" autocapitalize="off"></label>
+        <datalist id="ai-models"></datalist>
+        <p class="dim small" id="ai-model-note">สร้างคีย์ที่ <a href="https://openrouter.ai/keys" target="_blank" rel="noopener">openrouter.ai/keys</a> · ดูรุ่นและราคาที่ <a href="https://openrouter.ai/models" target="_blank" rel="noopener">openrouter.ai/models</a></p>
+      </div>
+      <p class="dim small">คีย์อยู่ในเครื่องนี้เท่านั้น ไม่ซิงก์ ไม่อยู่ในไฟล์สำรอง</p>
       <h3>ถามในแอปด้วย API key (ไม่จำเป็น)</h3>
       <p class="dim small">ไม่ต้องใส่ก็ใช้ได้ทุกอย่างผ่านการคัดลอกและวางกับ Claude ตามแพ็กเกจที่มีอยู่
         ถ้าใส่ API key ของคุณเอง (สร้างที่ console.anthropic.com · คิดเงินตามการใช้ แยกจาก Claude Pro/Max) จะมีปุ่ม “ถามในแอป” ให้ถามได้โดยไม่ต้องสลับแอป</p>
@@ -722,6 +743,10 @@
         </div>
         <div class="chips" id="rv-keys" role="group" aria-label="คำสำคัญ" hidden></div>
         <button type="button" class="rv-hit" id="rv-hit" data-rv="hit-play" hidden></button>
+        <div class="rv-textbar" id="rv-ai" hidden>
+          <button type="button" class="pill-btn" data-rv="ai-clean"><svg aria-hidden="true"><use href="#i-spark"/></svg><span>เกลาข้อความด้วย AI</span></button>
+          <span class="dim small" id="rv-ai-status">แก้คำที่ถอดผิดจากบริบท ไม่ย่อ ไม่ตัดเนื้อหา</span>
+        </div>
         <div class="rv-textbar" id="rv-textbar" hidden>
           <button type="button" class="pill-btn" data-rv="play-here"><svg aria-hidden="true"><use href="#i-play"/></svg><span>เล่นจากตรงนี้</span></button>
           <span class="dim small" id="rv-here">แตะในข้อความ แล้วกดเล่นจากตรงนั้น</span>
@@ -735,6 +760,7 @@
           <div class="sheet-buttons">
             <button type="button" class="primary" data-rv="local"><svg aria-hidden="true"><use href="#i-map"/></svg><span>สรุปในเครื่อง</span></button>
             <button type="button" class="secondary" data-rv="analyze"><svg aria-hidden="true"><use href="#i-spark"/></svg><span>สรุปด้วย Claude</span></button>
+            <button type="button" class="secondary" data-rv="ai-sum" hidden><svg aria-hidden="true"><use href="#i-spark"/></svg><span>สรุปด้วย AI</span></button>
           </div>
         </div>
         <div id="rv-sum" class="claude-out" hidden></div>
@@ -786,6 +812,7 @@
   <div class="menu-list">
     <button type="button" data-rvm="share">แชร์ไฟล์เสียง</button>
     <button type="button" data-rvm="copy">คัดลอกข้อความที่ถอด</button>
+    <button type="button" data-rvm="tidy">จัดวรรคตอนใหม่</button>
     <button type="button" data-rvm="export">ส่งออกเป็นไฟล์ข้อความ (.txt)</button>
     <button type="button" data-rvm="memo">เก็บสรุปเป็นโน้ตย่อ</button>
     <button type="button" data-rvm="delete" class="danger-text">ลบบันทึกนี้</button>

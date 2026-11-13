@@ -268,6 +268,8 @@ const PAUSE_AFTER = wordSet('ครับ ค่ะ คะ ครับผม �
 const PAUSE_BEFORE =
   /^(?:เรื่องต่อไป|ต่อไปเป็นเรื่อง|อีกเรื่อง|สุดท้ายเรื่อง|สรุปว่า|สรุปคือ|เพราะฉะนั้น|ดังนั้น|นอกจากนี้|อย่างไรก็ตาม|หลังจากนั้น|จากนั้น|การบ้าน|เอาเป็นว่า|แล้วก็|แล้วใคร|แล้วเรื่อง|ส่วนเรื่อง|แต่ว่า|แต่|เพราะ|ถ้า|อย่าลืม|ซึ่ง|ข้อดี|ข้อเสีย|แนะนำ|โดยทั่วไป|เดี๋ยว|ตกลง|งั้น|โอเค|ที่(?:แรก|สอง|สาม))/;
 const CLAUSE_WORDS = wordSet('และ หรือ โดย เช่น ก็ แล้ว ที่ ส่วน ควร ต้อง');
+/** Where a speaker pauses, for lib/thai.js (which knows the recognizer's own word breaks). */
+export const SPEECH = { FILLERS, PARTICLES, PAUSE_AFTER, PAUSE_BEFORE, CLAUSE_WORDS };
 
 /** A line → phrases (what lies between pauses) with their words: [{ p, toks }]. */
 function phrasesOf(line) {
@@ -291,6 +293,9 @@ function phrasesOf(line) {
   }
   return out;
 }
+
+/** A long run with no space, with a space put in where a speaker pauses (used by lib/thai.js). */
+export const breathe = (chunk) => pauses(chunk, words(chunk));
 
 function pauses(chunk, toks) {
   if (chunk.length < 40) return chunk; // fewer than ~12 words

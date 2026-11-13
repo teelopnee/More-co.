@@ -11,6 +11,8 @@ import * as V from './lib/voice.js';
 import * as Mm from './lib/mindmap.js';
 import * as Sum from './lib/summarize.js';
 import * as N from './lib/notes.js';
+import * as T from './lib/thai.js';
+import * as Ai from './lib/ai.js';
 import { adopt, bytesOf, cachedUrl, media, prepare, urlFor } from './lib/media.js';
 import { MapView } from './mapview.js';
 
@@ -549,7 +551,7 @@ function capture(text, { shared = false } = {}) {
     const label = /^(?:ผู้พูด|speaker|ผู้บรรยาย)?\s*\d*\s*\(?\d{1,2}:\d{2}/i.test(first) || /^(?:ผู้พูด|speaker)\s*\d+\s*:?$/i.test(first);
     const title = !label && first.length > 4 && first.length <= 60 ? first : `ข้อความที่แชร์มา ${shortDate(dayKey(new Date(now)))} ${timeOf(new Date(now))}`;
     const id = S.uid(now);
-    commit(withSummary(S.addRec(state, { id, at: now, title, parts: 0, durationMs: 0, origin: 'share', transcript: text.trim(), device: deviceName() }), id), { undoable: true });
+    commit(withSummary(S.addRec(state, { id, at: now, title, parts: 0, durationMs: 0, origin: 'share', transcript: T.tidy(text.trim(), [], { walls: false }).text, device: deviceName() }), id), { undoable: true });
     setTimeout(() => openRec(id, 'sum'), 50);
     return { kind: 'rec', msg: 'เก็บเป็นบันทึกพร้อมสรุปแล้ว' };
   }
@@ -3471,6 +3473,7 @@ function openClaude(question = '', { settings = false, job = { kind: 'ask' }, pa
   $('#stt-provider').value = sttProvider();
   $('#stt-gemini').value = voiceCfg.geminiKey ?? '';
   $('#stt-openai').value = voiceCfg.openaiKey ?? '';
+  renderAiSettings();
   android?.sttRefresh?.();
   renderSttSettings();
   $('#claude-settings').open = settings;
@@ -3487,23 +3490,25 @@ const nf = (n) => n.toLocaleString('th-TH');
 
 /** What this job sends to Claude ('' when there is nothing to send). */
 function claudePrompt() {
-  if (claudeJob.kind === 'rec') {
-    const r = findRec(claudeJob.id);
-    if (!r?.transcript?.trim()) return '';
-    const at = new Date(r.at);
-    return C.noteWebPrompt(C.timedText(r.transcript, r.times), 'การถอดเสียง', {
-      title: r.title,
-      when: `${longDate(dayKey(at))} เวลา ${timeOf(at)} น.`,
-      timed: !!r.times?.length,
-      pins: markLines(r),
-    });
-  }
+  if (claudeJob.kind === 'rec') return recPrompt(findRec(claudeJob.id));
   if (claudeJob.kind === 'map') {
     const map = state.maps.find((m) => m.id === claudeJob.id);
     return map ? C.mapWebPrompt(C.mapOutline(map)) : '';
   }
   const question = $('#claude-q').value.trim();
   return question ? C.webPrompt(question, $('#claude-context').checked ? C.contextFor(state, today) : '', { today: longDate(today) }) : '';
+}
+
+/** A recording for a model to summarise: its text with times, its bookmarks, and how to answer. */
+function recPrompt(r) {
+  if (!r?.transcript?.trim()) return '';
+  const at = new Date(r.at);
+  return C.noteWebPrompt(C.timedText(r.transcript, r.times), 'การถอดเสียง', {
+    title: r.title,
+    when: `${longDate(dayKey(at))} เวลา ${timeOf(at)} น.`,
+    timed: !!r.times?.length,
+    pins: markLines(r),
+  });
 }
 
 /** Big prompts may be more than one chat takes (Thai is about one token per character or two). */
@@ -3908,13 +3913,129 @@ for (const [sel, field] of [
   ['#stt-provider', 'provider'],
   ['#stt-gemini', 'geminiKey'],
   ['#stt-openai', 'openaiKey'],
+  ['#ai-provider', 'ai'],
+  ['#ai-gemini-key', 'geminiKey'],
+  ['#ai-openrouter-key', 'openrouterKey'],
+  ['#ai-openrouter-model', 'openrouterModel'],
 ]) {
   $(sel).addEventListener('change', (e) => {
     voiceCfg = { ...voiceCfg, [field]: e.target.value.trim() };
     writeLocal(V.VOICE_KEY, voiceCfg);
     renderSttSettings();
+    renderAiSettings();
     if (recview.open) renderRecView();
   });
+}
+
+// ---- optional AI (lib/ai.js): Gemini or OpenRouter with the person's own key, for cleaning up
+// a transcript and for the summary and mind map. Nothing is sent unless they press its buttons.
+
+/** { provider, key, model } when a service is chosen and has its key, else null. */
+function aiCfg() {
+  if (voiceCfg.ai === 'gemini' && voiceCfg.geminiKey) return { provider: 'gemini', key: voiceCfg.geminiKey, model: '' };
+  if (voiceCfg.ai === 'openrouter' && voiceCfg.openrouterKey) return { provider: 'openrouter', key: voiceCfg.openrouterKey, model: voiceCfg.openrouterModel ?? '' };
+  return null;
+}
+const aiName = () => Ai.AI[voiceCfg.ai]?.name ?? 'AI';
+
+let aiModels = null; // OpenRouter's catalogue, read once when its settings are first shown
+function renderAiSettings() {
+  const p = Ai.AI[voiceCfg.ai] ? voiceCfg.ai : '';
+  $('#ai-provider').value = p;
+  $('#ai-gemini').hidden = p !== 'gemini';
+  $('#ai-openrouter').hidden = p !== 'openrouter';
+  $('#ai-gemini-key').value = voiceCfg.geminiKey ?? '';
+  $('#stt-gemini').value = voiceCfg.geminiKey ?? '';
+  $('#ai-openrouter-key').value = voiceCfg.openrouterKey ?? '';
+  $('#ai-openrouter-model').value = voiceCfg.openrouterModel ?? '';
+  if (p !== 'openrouter' || aiModels) return;
+  aiModels = Ai.listModels().then((list) => {
+    $('#ai-models').innerHTML = list.slice(0, 400).map((m) => `<option value="${esc(m.id)}">${esc(m.name)}</option>`).join('');
+    // the catalogue changes often: the first choice comes from what is there today
+    if (!voiceCfg.openrouterModel && list.length) {
+      voiceCfg = { ...voiceCfg, openrouterModel: Ai.pickModel(list) };
+      writeLocal(V.VOICE_KEY, voiceCfg);
+      $('#ai-openrouter-model').value = voiceCfg.openrouterModel;
+    }
+    if (!list.length) aiModels = null; // offline: try again next time
+    return list;
+  });
+}
+
+/** Summary, mind map and things to do from the chosen service (the copy-and-paste prompt, sent for the person). */
+async function aiSummarize(id) {
+  const r = findRec(id);
+  const cfg = aiCfg();
+  if (!r || busy.has(id)) return;
+  if (!r.transcript?.trim()) {
+    toast('ถอดเสียงก่อน แล้วค่อยสรุป');
+    rvTab('text');
+    return;
+  }
+  if (!cfg) {
+    openClaude('', { settings: true });
+    toast('เลือกบริการ AI และใส่คีย์ก่อน');
+    return;
+  }
+  const name = aiName();
+  busy.set(id, { kind: 'ai', what: 'sum' });
+  renderRecView();
+  try {
+    const reply = await Ai.ask({ ...cfg, prompt: recPrompt(r) });
+    busy.delete(id);
+    applyRecAnswer(id, C.readPasted(reply), name);
+  } catch (err) {
+    toast(err?.message || 'สรุปไม่สำเร็จ');
+  } finally {
+    busy.delete(id);
+    if (rvId === id) renderRecView();
+  }
+}
+
+/**
+ * The recognizer's text put right by the chosen service: misheard words fixed from context, written
+ * as Thai is written. Sent a few minutes at a time; a part that comes back shortened (a summary,
+ * not the text) is left as it was. The times of the paragraphs stay, so the text still plays.
+ */
+async function aiClean(id) {
+  const r = findRec(id);
+  const cfg = aiCfg();
+  if (!r?.transcript?.trim() || busy.has(id)) return;
+  if (!cfg) {
+    openClaude('', { settings: true });
+    toast('เลือกบริการ AI และใส่คีย์ก่อน');
+    return;
+  }
+  const parts = Ai.batches(C.timedText(r.transcript, r.times, { gap: 30_000, max: 700 }));
+  const title = AUTO_REC_TITLE.test(r.title) ? '' : r.title;
+  try {
+    const out = [];
+    let kept = 0;
+    for (let i = 0; i < parts.length; i++) {
+      busy.set(id, { kind: 'ai', what: 'clean', done: i, total: parts.length });
+      if (rvId === id) renderRecView();
+      const got = Ai.readCleaned(await Ai.ask({ ...cfg, prompt: Ai.cleanupPrompt(parts[i], { title }) }), parts[i]);
+      if (!got) kept++;
+      out.push(got ?? Ai.readCleaned(parts[i], parts[i]));
+    }
+    if (kept === parts.length) throw new Error(`${aiName()} ไม่ได้ส่งข้อความที่เกลาแล้วกลับมา ข้อความเดิมยังอยู่`);
+    const cur = findRec(id);
+    if (!cur) return;
+    if (cur.transcript !== r.transcript) {
+      toast('ข้อความถูกแก้ระหว่างที่ AI ทำงาน จึงไม่ได้เปลี่ยนให้');
+      return;
+    }
+    const res = Ai.joinCleaned(out);
+    busy.delete(id);
+    spacingChecked.add(id);
+    commit(withSummary(S.editRec(state, id, { transcript: res.text, times: S.cleanTimes(res.times) }), id, { force: true }), { undoable: true });
+    toast(kept ? `เกลาแล้ว (${kept} ช่วงคงไว้ตามเดิม) และสรุปใหม่` : 'เกลาข้อความและสรุปใหม่แล้ว', { label: 'เลิกทำ', run: undo });
+  } catch (err) {
+    toast(err?.message || 'เกลาข้อความไม่สำเร็จ');
+  } finally {
+    busy.delete(id);
+    if (rvId === id) renderRecView();
+  }
 }
 
 function recRow(r) {
@@ -4138,10 +4259,12 @@ let captionBlocked = false; // it took the microphone once on this device: not a
 /** The words so far under the waveform, like the live transcript of a phone's recorder. */
 function renderLive(text, partial) {
   const box = $('#rec-live');
-  const t = V.tail(text, 180);
-  box.hidden = !t && !partial;
+  // as Thai is written (the recognizer puts a space after every word)
+  const t = V.tail(T.tidy(V.tail(text, 600)).text, 180);
+  const p = partial ? T.tidy(partial).text : '';
+  box.hidden = !t && !p;
   $('.rec-live-text', box).textContent = t;
-  $('.rec-live-partial', box).textContent = partial ? ` ${partial}` : '';
+  $('.rec-live-partial', box).textContent = p ? ` ${p}` : '';
 }
 
 function renderRecState() {
@@ -4218,8 +4341,9 @@ async function stopRecording() {
     return;
   }
   const title = `บันทึกเสียง ${shortDate(dayKey(new Date(res.at)))} ${timeOf(new Date(res.at))}`;
-  const transcript = (origin === 'android' ? res.transcript : words) || '';
-  const times = S.cleanTimes(origin === 'android' ? res.times : wordTimes);
+  const heard = T.tidy((origin === 'android' ? res.transcript : words) || '', S.cleanTimes(origin === 'android' ? res.times : wordTimes));
+  const transcript = heard.text;
+  const times = S.cleanTimes(heard.times);
   const marks = S.cleanMarks(res.marks);
   commit(withSummary(S.addRec(state, { id: res.id, title, at: res.at, durationMs: res.durationMs, mime: res.mime, parts: res.parts, device: deviceName(), origin, transcript, times, marks }), res.id));
   openRec(res.id);
@@ -4243,7 +4367,7 @@ async function waitNativeText(id) {
       }
       if (!m) break;
       if (m.stt === 'listening' || m.stt === 'running') continue;
-      if (m.transcript && findRec(id)) commit(withSummary(S.editRec(state, id, { transcript: m.transcript, times: S.cleanTimes(m.times) }), id));
+      if (m.transcript && findRec(id)) commit(withSummary(S.editRec(state, id, nativeText(m)), id));
       if (m.appending || m.stt === 'running') {
         busy.delete(id);
         followNative(id);
@@ -4282,11 +4406,12 @@ async function followNative(id) {
         continue;
       }
       const r = findRec(id);
-      if (m.transcript && m.transcript !== r.transcript) {
+      const got = nativeText(m);
+      if (got.transcript && got.transcript !== r.transcript) {
         // a longer text (the missed part added) makes a new summary
-        const grown = !r.transcript || m.transcript.startsWith(r.transcript);
-        commit(withSummary(S.editRec(state, id, { transcript: m.transcript, times: S.cleanTimes(m.times) }), id, { force: grown }));
-        toast(m.transcript.length > (r.transcript?.length ?? 0) && r.transcript ? 'ถอดช่วงที่ขาดเพิ่มให้แล้ว' : 'ถอดเป็นข้อความและสรุปแล้ว');
+        const grown = !r.transcript || got.transcript.startsWith(r.transcript);
+        commit(withSummary(S.editRec(state, id, got), id, { force: grown }));
+        toast(got.transcript.length > (r.transcript?.length ?? 0) && r.transcript ? 'ถอดช่วงที่ขาดเพิ่มให้แล้ว' : 'ถอดเป็นข้อความและสรุปแล้ว');
       } else if (!m.transcript) toast(m.stt === 'unsupported' ? deviceStt().text : 'ไม่ได้ยินเสียงพูดในไฟล์นี้');
       break;
     }
@@ -4300,7 +4425,7 @@ function renderSttProgress(id) {
   const job = busy.get(id);
   if (!job) return;
   const pct = Number.isFinite(job.progress) && job.progress >= 0 ? ` ${Math.round(job.progress * 100)}%` : '';
-  $('#rv-stt-status').textContent = `กำลังถอดด้วยระบบของเครื่อง…${pct}${job.text ? ` ${V.tail(job.text, 100)}` : ''} · ปิดแอปได้ ทำต่อให้เอง`;
+  $('#rv-stt-status').textContent = `กำลังถอดด้วยระบบของเครื่อง…${pct}${job.text ? ` ${V.tail(T.tidy(V.tail(job.text, 400)).text, 100)}` : ''} · ปิดแอปได้ ทำต่อให้เอง`;
 }
 
 recDialog.addEventListener('cancel', (e) => {
@@ -4374,6 +4499,8 @@ function openRec(id, tab = 'text') {
   rvTab(tab);
   if (!recview.open) recview.showModal();
   renderRecView();
+  // text kept with a space after every word (older versions): put right once, when it is opened
+  setTimeout(() => rvId === id && recview.open && fixSpacing(id), 350);
   if (android?.recList && findRec(id).origin === 'android' && !busy.has(id)) {
     try {
       const m = JSON.parse(android.recList()).find((x) => x.id === id);
@@ -4428,12 +4555,23 @@ function renderRecView() {
   renderMarks(r);
   renderTextBar();
   renderFind();
+  // Optional AI (shown only when a service and its key are set)
+  const ai = aiCfg();
+  const aiBusy = job?.kind === 'ai';
+  $('#rv-ai').hidden = !ai || !hasText;
+  $('[data-rv="ai-clean"]').disabled = !!job;
+  $('[data-rv="ai-clean"] span').textContent = aiBusy && job.what === 'clean' ? `กำลังเกลา… ${job.total > 1 ? `${job.done + 1}/${job.total}` : ''}` : 'เกลาข้อความด้วย AI';
+  $('#rv-ai-status').textContent = aiBusy && job.what === 'clean' ? `ส่งให้ ${aiName()} ทีละช่วง` : 'แก้คำที่ถอดผิดจากบริบท ไม่ย่อ ไม่ตัดเนื้อหา';
   // Summary
   const sum = $('#rv-sum');
-  $('#rv-sum-empty').hidden = !!r.summary && job?.kind !== 'claude';
+  $('#rv-sum-empty').hidden = !!r.summary && job?.kind !== 'claude' && !(aiBusy && job.what === 'sum');
   $('[data-rv="analyze"]').disabled = !!job;
   $('[data-rv="local"]').disabled = !!job || !hasText;
   $('[data-rv="analyze"] span').textContent = job?.kind === 'claude' ? 'Claude กำลังสรุป…' : 'สรุปด้วย Claude';
+  const aiSum = $('#rv-sum-empty [data-rv="ai-sum"]');
+  aiSum.hidden = !ai;
+  aiSum.disabled = !!job || !hasText;
+  $('span', aiSum).textContent = aiBusy && job.what === 'sum' ? `${aiName()} กำลังสรุป…` : `สรุปด้วย ${ai ? aiName() : 'AI'}`;
   sum.hidden = !r.summary;
   if (r.summary) {
     const now = Date.now();
@@ -4445,7 +4583,7 @@ function renderRecView() {
     sum.innerHTML =
       `<div class="answer">${withTimes(miniMarkdown(r.summary))}</div>` +
       (rows.length ? `<div class="suggest"><p class="suggest-title">สิ่งที่ต้องทำจากบันทึกนี้</p><ul>${rows.join('')}</ul><button type="button" class="primary" data-rv="add-items">แปะที่เลือก</button></div>` : '') +
-      `<div class="sheet-buttons"><button type="button" class="secondary" data-rv="analyze-again">สรุปใหม่</button><button type="button" class="secondary" data-rv="copy-sum">คัดลอก</button><button type="button" class="secondary" data-rv="analyze">ให้ Claude สรุป</button></div>`;
+      `<div class="sheet-buttons"><button type="button" class="secondary" data-rv="analyze-again">สรุปใหม่</button><button type="button" class="secondary" data-rv="copy-sum">คัดลอก</button><button type="button" class="secondary" data-rv="analyze">ให้ Claude สรุป</button>${ai ? `<button type="button" class="secondary" data-rv="ai-sum"${job ? ' disabled' : ''}>ให้ ${esc(aiName())} สรุป</button>` : ''}</div>`;
   }
   // Mind map
   const map = state.maps.find((m) => m.id === r.mapId);
@@ -4846,7 +4984,7 @@ async function claudeFinal(request) {
 }
 
 /** A copied-and-pasted answer about a recording: title, summary, mind map and things to do. */
-function applyRecAnswer(id, p) {
+function applyRecAnswer(id, p, from = 'Claude') {
   const cur = findRec(id);
   if (!cur) return;
   // no headings at all: the whole answer is the summary
@@ -4874,7 +5012,7 @@ function applyRecAnswer(id, p) {
   setJob({ kind: 'ask' });
   commit(next, { undoable: true });
   if (rvId === id && recview.open) rvTab(summary || p.items.length ? 'sum' : 'map');
-  toast('ใส่คำตอบจาก Claude แล้ว', { label: 'เลิกทำ', run: undo });
+  toast(`ใส่คำตอบจาก ${from} แล้ว`, { label: 'เลิกทำ', run: undo });
 }
 
 /** Fresh branches keep the time of an old branch with the same words. */
@@ -4914,6 +5052,44 @@ function applyMapAnswer(id, p) {
   $('#claude-paste').value = '';
   setJob({ kind: 'ask' });
   replaceMap(id, outline, 'ขยายมายด์แมปแล้ว');
+}
+
+/**
+ * The Android recognizer's text for a recording, as Thai is written (lib/thai.js): { transcript, times }.
+ * Remembered per recording, since the app is asked for its list again every time it comes to the front.
+ */
+const tidied = new Map(); // rec id → { len, head, transcript, times }
+function nativeText(m) {
+  const raw = m.transcript || '';
+  const hit = tidied.get(m.id);
+  if (hit && hit.len === raw.length && hit.head === raw.slice(0, 48)) return { transcript: hit.transcript, times: hit.times };
+  const t = T.tidy(raw, S.cleanTimes(m.times));
+  const out = { len: raw.length, head: raw.slice(0, 48), transcript: t.text, times: S.cleanTimes(t.times) };
+  tidied.set(m.id, out);
+  return { transcript: out.transcript, times: out.times };
+}
+
+/**
+ * A recording kept before the app tidied the recognizer's text (a space after every word): fixed
+ * when it is opened, with a new summary, and a new mind map if the old one was never edited.
+ * `manual`: asked for from the menu, also airs text that has no spaces at all.
+ */
+const spacingChecked = new Set();
+function fixSpacing(id, { manual = false } = {}) {
+  const r = findRec(id);
+  if (!r?.transcript || busy.has(id)) return false;
+  if (!manual) {
+    if (spacingChecked.has(id)) return false;
+    spacingChecked.add(id);
+  }
+  const t = T.tidy(r.transcript, r.times ?? [], { walls: manual });
+  if (!t.changed) return false;
+  let next = withSummary(S.editRec(state, id, { transcript: t.text, times: S.cleanTimes(t.times) }), id, { force: true });
+  const map = next.maps.find((m) => m.id === r.mapId);
+  if (map && map.source?.kind === 'rec' && Math.abs((map.updatedAt ?? 0) - (map.createdAt ?? 0)) < 2000) next = withMap(next, id);
+  commit(next, { undoable: true });
+  toast('จัดวรรคตอนของข้อความใหม่ และสรุปใหม่แล้ว', { label: 'เลิกทำ', run: undo });
+  return true;
 }
 
 const AUTO_REC_TITLE = /^(?:บันทึกเสียง|ไฟล์เสียงที่แชร์มา|ข้อความที่แชร์มา)\s/;
@@ -5060,6 +5236,8 @@ recview.addEventListener('click', async (e) => {
       toast(`เล่นจาก ${V.clock(ms)}`);
     } else toast(rvUrls.length ? 'ช่วงนี้ไม่มีเวลากำกับ' : 'ไฟล์เสียงไม่อยู่ในเครื่องนี้');
   }
+  if (act === 'ai-clean') aiClean(r.id);
+  if (act === 'ai-sum') aiSummarize(r.id);
   if (act === 'transcribe') transcribeRec(r.id);
   if (act === 'settings') openClaude('', { settings: true });
   if (act === 'analyze') analyzeRec(r.id);
@@ -5120,6 +5298,7 @@ recview.addEventListener('click', async (e) => {
     const menuEl = $('#rv-menu');
     menuEl.querySelector('[data-rvm="share"]').hidden = !rvUrls.length;
     menuEl.querySelector('[data-rvm="copy"]').hidden = !r.transcript;
+    menuEl.querySelector('[data-rvm="tidy"]').hidden = !r.transcript;
     menuEl.querySelector('[data-rvm="export"]').hidden = !r.transcript && !r.summary;
     menuEl.querySelector('[data-rvm="memo"]').hidden = !r.summary;
     menuEl.showModal();
@@ -5153,6 +5332,7 @@ $('#rv-menu').addEventListener('click', async (e) => {
   }
   $('#rv-menu').close();
   if (act === 'copy') copyText(r.transcript);
+  if (act === 'tidy' && !fixSpacing(r.id, { manual: true })) toast('ข้อความนี้จัดวรรคตอนดีอยู่แล้ว');
   if (act === 'export') shareFile(`${r.title.replace(/[\\/:*?"<>|]/g, ' ').slice(0, 60)}.txt`, recText(r), 'text/plain');
   if (act === 'memo') {
     commit(S.addMemo(state, { title: r.title, text: r.summary.replace(/\*\*(.+?)\*\*/g, '$1'), labels: ['บันทึกเสียง'] }), { undoable: true });
@@ -5377,15 +5557,16 @@ function syncNativeRecordings() {
     const have = next.recs.find((r) => r.id === m.id);
     if (have) {
       const settled = m.stt !== 'running' && m.stt !== 'listening' && !m.appending;
-      if (settled && m.transcript && m.transcript !== have.transcript && (!have.transcript || m.transcript.startsWith(have.transcript)))
-        next = withSummary(S.editRec(next, m.id, { transcript: m.transcript, times: S.cleanTimes(m.times) }), m.id, { force: !!have.transcript });
+      const got = settled && m.transcript ? nativeText(m) : null;
+      if (got && got.transcript !== have.transcript && (!have.transcript || got.transcript.startsWith(have.transcript)))
+        next = withSummary(S.editRec(next, m.id, got), m.id, { force: !!have.transcript });
       if (Array.isArray(m.marks) && m.marks.length && !have.marks?.length) next = S.editRec(next, m.id, { marks: S.cleanMarks(m.marks) });
       continue;
     }
     if (next.tomb?.[m.id]) continue;
     const title = m.shared ? `ไฟล์เสียงที่แชร์มา ${shortDate(dayKey(new Date(m.at)))} ${timeOf(new Date(m.at))}` : `บันทึกเสียง ${shortDate(dayKey(new Date(m.at)))} ${timeOf(new Date(m.at))}`;
-    const text = m.stt === 'running' && !m.appending ? '' : m.transcript || '';
-    next = withSummary(S.addRec(next, { id: m.id, at: m.at, title, durationMs: m.durationMs, mime: m.mime, parts: m.parts, device: deviceName(), origin: 'android', transcript: text, times: text ? S.cleanTimes(m.times) : [], marks: S.cleanMarks(m.marks) }), m.id);
+    const got = m.stt === 'running' && !m.appending ? { transcript: '', times: [] } : nativeText(m);
+    next = withSummary(S.addRec(next, { id: m.id, at: m.at, title, durationMs: m.durationMs, mime: m.mime, parts: m.parts, device: deviceName(), origin: 'android', ...got, marks: S.cleanMarks(m.marks) }), m.id);
   }
   if (next !== state) commit(next);
   // Still recording (started from the tile or the side key): show it.

@@ -20,7 +20,12 @@ computer and writes in Thai; reply in Thai.
     in `src/vendor/anthropic.js` stays as an optional path.
     `src/vendor/` holds pre-bundled third-party code; regenerate it as the app README says.
     Voice notes (`src/lib/voice.js`, IndexedDB) are transcribed by the device's own speech recognition
-    (optionally the owner's Gemini/OpenAI key; Claude takes no audio). They are summarized on the device
+    (optionally the owner's Gemini/OpenAI key; Claude takes no audio). Recognizers put a space after
+    every Thai word: `src/lib/thai.js` `tidy()` joins the words again wherever such text comes in, keeps
+    real pauses and moves `times` to match. An optional AI (`src/lib/ai.js`: the owner's Gemini or
+    OpenRouter key, off by default, nothing sent until a button is pressed) can fix misheard words and
+    write the summary and mind map; OpenRouter model ids are read from its live catalogue, never
+    hard-coded. They are summarized on the device
     with no AI (`src/lib/summarize.js`: TextRank/TextTiling + Thai meeting-note rules, a template per
     kind of recording, deletion-only node labels; tested against `tests/fixtures/*.txt`) into mind maps
     (`src/lib/mindmap.js`, `src/mapview.js`; nodes may carry `at` ms to play from); Claude is optional.
