@@ -67,19 +67,34 @@ class AppContainer(context: Context) {
 
     private val llm = OpenAiCompatClient(http) {
         val s = settings.state.value
+        val c = candidates.takeIf { it.first == candidateKey(s) }?.second.orEmpty()
         if (s.llmProvider == AppSettings.PROVIDER_GEMINI) {
-            LlmConfig(baseUrl = ModelCatalog.GEMINI_BASE, apiKey = s.geminiKey, model = s.geminiModel.ifBlank { "gemini-flash-latest" })
+            val primary = s.geminiModel.trim().ifBlank { c.firstOrNull() ?: "gemini-flash-latest" }
+            LlmConfig(ModelCatalog.GEMINI_BASE, s.geminiKey, primary, fallbacks = (c - primary).take(5))
         } else {
-            LlmConfig(baseUrl = s.llmBaseUrl, apiKey = s.llmKey, model = s.llmModel)
+            LlmConfig(s.llmBaseUrl, s.llmKey, s.llmModel, fallbacks = (c - s.llmModel).take(2))
         }
     }
 
-    /** Gemini: ยังไม่ได้เลือกรุ่น → ดึงรายชื่อจาก Google แล้วเลือก Flash ล่าสุด (จำไว้ ไม่ดึงซ้ำ) */
+    /** รุ่นสำรองตามลำดับ (จากรายชื่อสดของผู้ให้บริการ) ใช้เมื่อรุ่นหลักไม่ว่างหรือโควตาฟรีหมด */
+    @Volatile
+    private var candidates: Pair<String, List<String>> = "" to emptyList()
+
+    private fun candidateKey(s: AppSettings) = "${s.llmProvider}|${s.activeLlmKey.hashCode()}|${s.llmModel}"
+
+    /** ดึงรายชื่อรุ่นครั้งแรกที่ถาม (และเมื่อเปลี่ยนคีย์/ผู้ให้บริการ) — ดึงไม่ได้ก็ใช้รุ่นที่ตั้งไว้ต่อ */
     suspend fun ensureModel() {
         val s = settings.state.value
-        if (s.llmProvider != AppSettings.PROVIDER_GEMINI || s.geminiModel.isNotBlank() || s.geminiKey.isBlank()) return
-        val picked = runCatching { ModelCatalog.pickGemini(ModelCatalog.geminiModels(http, s.geminiKey)) }.getOrNull() ?: return
-        settings.update { it.copy(geminiModel = picked) }
+        val key = candidateKey(s)
+        if (candidates.first == key || s.activeLlmKey.isBlank()) return
+        val list = runCatching {
+            when {
+                s.llmProvider == AppSettings.PROVIDER_GEMINI -> ModelCatalog.geminiCandidates(ModelCatalog.geminiModels(http, s.geminiKey))
+                s.llmModel.endsWith(":free") -> ModelCatalog.openRouterFreeModels(http).take(4)
+                else -> emptyList()
+            }
+        }.getOrNull() ?: return
+        candidates = key to list
     }
 
     /** รายชื่อรุ่นให้เลือกในหน้าตั้งค่า */

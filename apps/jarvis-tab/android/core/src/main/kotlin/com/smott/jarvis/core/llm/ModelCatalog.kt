@@ -42,6 +42,25 @@ object ModelCatalog {
             .firstOrNull()
     }
 
+    /**
+     * ลำดับรุ่นที่จะลองเมื่อรุ่นแรกไม่ว่าง — แผนฟรีเจอ 503 "high demand" บ่อย และมักเต็มพร้อมกันทั้งตระกูล Flash
+     * (ทดสอบจริง พ.ย. 2026: Flash ทุกรุ่น 503 แต่ Flash-Lite ตอบได้) จึงสลับ Flash กับ Flash-Lite:
+     * Flash ใหม่สุด → Lite ใหม่สุด → Flash รองลงมา → "flash-latest" → Lite รองลงมา → …
+     */
+    fun geminiCandidates(ids: List<String>, max: Int = 6): List<String> {
+        val skip = Regex("(image|tts|audio|live|embed|exp|preview|thinking|vision|aqa|imagen|veo|learnlm|robotics|computer|omni|transcribe)", RegexOption.IGNORE_CASE)
+        val chat = ids.filter { it.startsWith("gemini") && !skip.containsMatchIn(it) }
+        fun version(id: String) = Regex("gemini-(\\d+(?:\\.\\d+)?)").find(id)?.groupValues?.get(1)?.toDoubleOrNull() ?: 0.0
+        val flash = chat.filter { it.contains("flash") && !it.contains("lite") && version(it) > 0 }.sortedByDescending { version(it) }
+        val alias = chat.filter { it == "gemini-flash-latest" }
+        val lite = chat.filter { it.contains("flash-lite") && version(it) > 0 }.sortedByDescending { version(it) } +
+            chat.filter { it == "gemini-flash-lite-latest" }
+        val mixed = listOfNotNull(
+            flash.getOrNull(0), lite.getOrNull(0), flash.getOrNull(1), alias.firstOrNull(), lite.getOrNull(1), flash.getOrNull(2),
+        ) + flash.drop(3) + lite.drop(2)
+        return mixed.distinct().take(max)
+    }
+
     /** โมเดลฟรีบน OpenRouter ที่ใช้เครื่องมือได้ เรียงจาก context ยาวไปสั้น (ไม่ต้องใช้คีย์) */
     suspend fun openRouterFreeModels(http: Http): List<String> {
         val text = withRetry(1) { http.get("$OPENROUTER_BASE/models".toHttpUrl()) }

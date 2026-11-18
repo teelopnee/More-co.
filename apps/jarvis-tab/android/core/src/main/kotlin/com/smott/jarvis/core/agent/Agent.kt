@@ -123,7 +123,7 @@ class Agent(
                 continue
             }
 
-            messages += ChatMessage(role = "assistant", content = text.ifEmpty { null }, toolCalls = calls)
+            messages += ChatMessage(role = "assistant", content = text.ifEmpty { null }, toolCalls = calls, extraContent = reply.extraContent)
 
             val final = calls.firstOrNull { it.function.name == BriefingSchema.NAME }
             if (final != null) {
