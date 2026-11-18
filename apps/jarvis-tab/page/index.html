@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Jarvis Tab</title>
+<meta name="description" content="ผู้ช่วย AI สั่งด้วยเสียงบน Galaxy Tab: พูด Hey Jarvis แล้วค้นข้อมูลขึ้นจอแบบ HUD พร้อมคลิป ภาพ ตัวเลข และที่มา">
+<meta name="color-scheme" content="dark">
+<link rel="icon" href="icons/favicon.svg" type="image/svg+xml">
+<style>
+:root { --bg: #03070d; --surface: #08182a; --ink: #f1f7fb; --dim: #86aec6; --line: #59c4f5; --rose: #ff2e63; --rose-hi: #ff9bb8; --warn: #ffc145; }
+* { box-sizing: border-box; }
+body { margin: 0; background: radial-gradient(ellipse at 50% 30%, #0b3c5e8c, transparent 70%), var(--bg); background-color: var(--bg); color: var(--ink);
+  font: 17px/1.6 ui-monospace, "JetBrains Mono", "SFMono-Regular", Menlo, "Noto Sans Thai", "Leelawadee UI", monospace; min-height: 100vh; }
+main { max-width: 720px; margin: 0 auto; padding: 28px 16px 56px; }
+header { display: flex; gap: 14px; align-items: center; }
+header img { width: 64px; height: 64px; border-radius: 16px; }
+h1 { margin: 0; font-size: 24px; line-height: 1.25; letter-spacing: .02em; }
+h2 { margin: 30px 0 8px; font-size: 13px; letter-spacing: .14em; color: var(--dim); text-transform: uppercase; }
+p { margin: 8px 0; }
+.dim { color: var(--dim); }
+.small { font-size: 14px; }
+.orb { display: grid; place-items: center; height: 190px; margin: 18px 0 4px; }
+.orb i { position: relative; width: 120px; height: 120px; border-radius: 50%; border: 9px solid var(--rose);
+  box-shadow: 0 0 22px #ff2e6399, inset 0 0 18px #ff2e6355; background: #12030a; animation: pulse 2.4s ease-in-out infinite; }
+.orb i::before { content: ""; position: absolute; inset: -26px; border-radius: 50%; border: 2px dashed #ffffffaa; animation: spin 14s linear infinite; }
+.orb i::after { content: "JARVIS"; position: absolute; inset: 0; display: grid; place-items: center; font: italic 700 18px ui-monospace, monospace; color: #fff; text-shadow: 0 0 8px var(--rose); }
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes pulse { 50% { box-shadow: 0 0 34px #ff2e63cc, inset 0 0 22px #ff2e6377; } }
+@media (prefers-reduced-motion: reduce) { .orb i, .orb i::before { animation: none; } }
+.download { display: flex; align-items: center; justify-content: center; gap: 10px; min-height: 56px; margin: 18px 0 6px; border-radius: 4px;
+  border: 1.5px solid var(--line); background: #59c4f51f; color: var(--ink); font-weight: 700; font-size: 18px; text-decoration: none; box-shadow: 0 0 14px #59c4f555; }
+.download:active { background: #59c4f540; }
+ol { padding-left: 24px; }
+li { margin: 10px 0; }
+li > span { display: block; color: var(--dim); font-size: 15px; }
+em { font-style: normal; font-weight: 700; color: var(--ink); }
+.box { margin: 14px 0; padding: 12px 14px; border-radius: 4px; border: 1px solid #59c4f555; background: #08182a99; font-size: 15px; }
+.box.warn { border-left: 4px solid var(--warn); }
+.warn { color: var(--warn); font-weight: 700; }
+code { font-size: 12px; word-break: break-all; }
+a { color: var(--line); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <img src="icons/favicon.svg" alt="">
+    <div>
+      <h1>Jarvis Tab</h1>
+      <p class="dim">ผู้ช่วย AI สั่งด้วยเสียง สำหรับแท็บเล็ต Android</p>
+    </div>
+  </header>
+
+  <div class="orb" aria-hidden="true"><i></i></div>
+
+  <p>พูดว่า <em>"Hey Jarvis"</em> ลูกแก้ววาบแสงแล้วทักทาย บอกสิ่งที่อยากรู้เป็นภาษาไทย
+    Jarvis ค้นเว็บ ข่าว ราคาหุ้น และคลิป แล้วจัดขึ้นจอเป็นแผงแบบ HUD ทั้งข้อความ ตัวเลข กราฟ ภาพ และวิดีโอที่เล่นอยู่ในแผง
+    ทุกข้อมูลมีเลขที่มาให้กดดู พูดว่า <em>"อธิบายให้ฟัง"</em> เพื่อให้อ่านทีละแผง</p>
+
+  <!--APK-->
+  <a class="download" href="jarvis-tab.apk" download>ดาวน์โหลด APK ({{SIZE}})</a>
+  <p class="dim small">รุ่น {{VERSION}} · {{UPDATE}}</p>
+
+  <h2>ติดตั้ง</h2>
+  <ol>
+    <li><strong>ดาวน์โหลด</strong>
+      <span>เปิดหน้านี้บนแท็บเล็ตด้วย Chrome แตะปุ่มด้านบน ถ้าเตือนว่าไฟล์อาจเป็นอันตราย แตะ <em>ดาวน์โหลดต่อ</em></span></li>
+    <li><strong>ติดตั้ง</strong>
+      <span>แตะไฟล์ที่ดาวน์โหลดเสร็จ → <em>การตั้งค่า</em> → อนุญาตให้ Chrome ติดตั้งแอป → กลับมาแตะ <em>ติดตั้ง</em></span></li>
+    <li><strong>ใส่คีย์</strong>
+      <span>เปิดแอปครั้งแรก หน้าตั้งค่าขึ้นเอง ใส่คีย์ OpenRouter (สมอง, จ่ายตามการใช้) และ Tavily (ค้นเว็บ + คลิป, มีแบบฟรี)
+        ส่วน Finnhub / Twelve Data (หุ้น) ใส่ทีหลังได้</span></li>
+    <li><strong>อนุญาตไมโครโฟนและการแจ้งเตือน</strong>
+      <span>แล้วพูด <em>"Hey Jarvis"</em> ได้เลย ระหว่างที่ฟังจะมีแจ้งเตือน "Jarvis พร้อมฟัง" ค้างไว้ (กติกาของ Android)</span></li>
+  </ol>
+
+  <h2>อยากเรียกได้ตอนใช้แอปอื่น</h2>
+  <ol>
+    <li>ตั้งค่าในแอป → เปิด <em>ฟังต่อแม้สลับไปแอปอื่น</em></li>
+    <li>กด <em>อนุญาต</em> ที่ "เด้งขึ้นมาเหนือแอปอื่น" และ "ไม่ให้ระบบปิด Jarvis"</li>
+    <li>Samsung: การตั้งค่า → การดูแลแบตเตอรี่ → ขีดจำกัดการใช้งานเบื้องหลัง → <em>แอปที่ไม่เข้าสู่โหมดสลีป</em> → เพิ่ม Jarvis</li>
+  </ol>
+
+  <div class="box warn">
+    <strong>ถ้าติดตั้งไม่ได้ ขึ้นว่าแอปถูกบล็อก</strong>
+    <p>Google Play Protect หรือ Samsung Auto Blocker อาจบล็อกแอปที่ติดตั้งเอง ปิดชั่วคราวเฉพาะตอนติดตั้งไฟล์จากหน้านี้แล้วเปิดกลับ:</p>
+    <p>Play Store → รูปโปรไฟล์ → <em>Play Protect</em> → ⚙ → ปิด <em>สแกนแอปด้วย Play Protect</em><br>
+      การตั้งค่า → ความปลอดภัยและความเป็นส่วนตัว → <em>Auto Blocker</em> → ปิด</p>
+    <p class="dim small">อย่าทำแบบนี้กับไฟล์ APK ที่ได้มาจากที่อื่น</p>
+  </div>
+
+  <h2>ความเป็นส่วนตัว</h2>
+  <p>คำปลุก "Hey Jarvis" ฟังและประมวลผลในเครื่องทั้งหมด ไม่มีเสียงออกไปไหน
+    เมื่อถูกเรียกแล้ว คำสั่งแปลงเป็นข้อความด้วยบริการเสียงของเครื่อง และส่งไปค้นผ่านบริการที่คุณใส่คีย์ไว้เท่านั้น
+    คีย์ทุกตัวเข้ารหัสเก็บไว้ในเครื่อง</p>
+
+  <h2>รู้ไว้</h2>
+  <ul>
+    <li>คำปลุกเป็นภาษาอังกฤษ "Hey Jarvis" ส่วนคำสั่งพูดไทยได้ปกติ ปรับความไวได้ในหน้าตั้งค่า</li>
+    <li>คำสั่งสั้น ๆ: "หยุด", "เคลียร์จอ", "เริ่มใหม่", "ปิดเสียง", "พูดอีกที", "อธิบายให้ฟัง"</li>
+    <li>คลิปบางคลิปเจ้าของปิดการฝังไว้ แตะ ↗ ที่หัวแผงเพื่อเปิดในแอป YouTube</li>
+    <li>โมเดลคำปลุก (openWakeWord) ใช้ได้เฉพาะส่วนตัว ไม่ใช่เชิงพาณิชย์ (CC BY-NC-SA 4.0)</li>
+  </ul>
+
+  <p class="dim small">SHA-256: <code>{{SHA256}}</code></p>
+</main>
+</body>
+</html>

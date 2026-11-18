@@ -1,0 +1,15 @@
+openWakeWord — https://github.com/dscripka/openWakeWord (David Scripka)
+
+Files in app/src/main/assets/wake/:
+  melspectrogram.onnx, embedding_model.onnx, hey_jarvis_v0.1.onnx
+  downloaded from the v0.5.1 release of openWakeWord.
+
+License (from the openWakeWord README):
+  "All of the code in this repository is licensed under the Apache 2.0 license."
+  "All of the included pre-trained models are licensed under the Creative Commons
+   Attribution-NonCommercial-ShareAlike 4.0 International license"
+  https://creativecommons.org/licenses/by-nc-sa/4.0/
+
+The Kotlin port in core/src/main/kotlin/com/smott/jarvis/core/wake/ follows the
+streaming feature pipeline of openWakeWord (Apache-2.0).
+This app is for personal, non-commercial use, which the model license allows.

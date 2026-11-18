@@ -1,0 +1,14 @@
+{
+  "name": "jarvis-tab",
+  "private": true,
+  "version": "0.3.0",
+  "description": "Jarvis Tab — ผู้ช่วย AI สั่งด้วยเสียงบน Galaxy Tab: พูด \"Hey Jarvis\" แล้วค้นข้อมูลขึ้นจอแบบ HUD",
+  "type": "module",
+  "scripts": {
+    "test": "node --test \"tests/*.test.js\"",
+    "build": "node scripts/build.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
