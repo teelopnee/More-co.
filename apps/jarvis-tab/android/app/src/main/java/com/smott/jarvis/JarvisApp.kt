@@ -28,6 +28,7 @@ import android.content.Intent
 import android.provider.Settings
 import com.smott.jarvis.core.tools.FindVideosTool
 import com.smott.jarvis.core.llm.ModelCatalog
+import com.smott.jarvis.core.keys.KeyChecker
 import com.smott.jarvis.data.AppSettings
 import okhttp3.OkHttpClient
 import java.io.File
@@ -97,15 +98,22 @@ class AppContainer(context: Context) {
         candidates = key to list
     }
 
-    /** รายชื่อรุ่นให้เลือกในหน้าตั้งค่า */
-    suspend fun modelChoices(provider: String, key: String): List<String> =
-        if (provider == AppSettings.PROVIDER_GEMINI) {
-            val ids = ModelCatalog.geminiModels(http, key)
-            val best = ModelCatalog.pickGemini(ids)
-            (listOfNotNull(best) + ids.filter { it.startsWith("gemini") && it.contains("flash") && it != best }).distinct().take(8)
-        } else {
-            ModelCatalog.openRouterFreeModels(http).take(8)
-        }
+    /** ตรวจคีย์ในหน้าตั้งค่า */
+    val keys = KeyChecker(http)
+
+    /** ลำดับรุ่น Gemini ที่จะใช้ (สำหรับให้เลือกในหน้าตั้งค่า) */
+    suspend fun geminiOrder(key: String): List<String> = ModelCatalog.geminiCandidates(ModelCatalog.geminiModels(http, key))
+
+    @Volatile
+    private var openRouterCache: Pair<Long, List<ModelCatalog.Choice>>? = null
+
+    /** รายชื่อรุ่น OpenRouter พร้อมราคา (จำไว้ 10 นาที) */
+    suspend fun openRouterChoices(): List<ModelCatalog.Choice> {
+        openRouterCache?.let { (at, list) -> if (System.currentTimeMillis() - at < 10 * 60_000L && list.isNotEmpty()) return list }
+        val list = ModelCatalog.openRouterChoices(http)
+        openRouterCache = System.currentTimeMillis() to list
+        return list
+    }
 
     private val device = DeviceTools(app)
     private val researchTools: List<Tool> = listOf(

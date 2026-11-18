@@ -61,6 +61,43 @@ object ModelCatalog {
         return mixed.distinct().take(max)
     }
 
+    /** โมเดล 1 รุ่นบน OpenRouter สำหรับให้แตะเลือก (ราคาเป็นดอลลาร์ต่อ 1 ล้านโทเคน) */
+    data class Choice(
+        val id: String,
+        val name: String,
+        val free: Boolean,
+        val inPerM: Double,
+        val outPerM: Double,
+        val context: Long,
+        /** ชื่อที่ขึ้นต้นด้วย "~" = ชี้ไปรุ่นล่าสุดของตระกูลนั้นเสมอ */
+        val latestAlias: Boolean,
+    )
+
+    /** ทุกรุ่นบน OpenRouter ที่ใช้เครื่องมือได้ (Jarvis ต้องใช้) — ไม่ต้องใช้คีย์ */
+    suspend fun openRouterChoices(http: Http): List<Choice> {
+        val text = withRetry(1) { http.get("$OPENROUTER_BASE/models".toHttpUrl()) }
+        val data = JarvisJson.parseToJsonElement(text).jsonObject["data"] as? JsonArray ?: return emptyList()
+        return data.mapNotNull { e ->
+            val m = e as? JsonObject ?: return@mapNotNull null
+            val id = (m["id"] as? JsonPrimitive)?.contentOrNull ?: return@mapNotNull null
+            val params = (m["supported_parameters"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }.orEmpty()
+            if ("tools" !in params || "tool_choice" !in params) return@mapNotNull null
+            val pricing = m["pricing"] as? JsonObject
+            fun price(k: String) = ((pricing?.get(k) as? JsonPrimitive)?.contentOrNull?.toDoubleOrNull() ?: 0.0) * 1_000_000
+            val inP = price("prompt")
+            val outP = price("completion")
+            Choice(
+                id = id,
+                name = ((m["name"] as? JsonPrimitive)?.contentOrNull ?: id).replace(" (free)", "").trim(),
+                free = id.endsWith(":free") || (inP == 0.0 && outP == 0.0),
+                inPerM = inP,
+                outPerM = outP,
+                context = (m["context_length"] as? JsonPrimitive)?.longOrNull ?: 0L,
+                latestAlias = id.startsWith("~"),
+            )
+        }
+    }
+
     /** โมเดลฟรีบน OpenRouter ที่ใช้เครื่องมือได้ เรียงจาก context ยาวไปสั้น (ไม่ต้องใช้คีย์) */
     suspend fun openRouterFreeModels(http: Http): List<String> {
         val text = withRetry(1) { http.get("$OPENROUTER_BASE/models".toHttpUrl()) }

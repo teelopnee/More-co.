@@ -43,10 +43,10 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.smott.jarvis.data.AppSettings
+import com.smott.jarvis.core.keys.KeyService
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.runtime.rememberCoroutineScope
-import kotlinx.coroutines.launch
 import android.content.Intent
 import android.net.Uri
 import android.os.PowerManager
@@ -64,28 +64,14 @@ fun SettingsScreen(
     current: AppSettings,
     onSave: (AppSettings) -> Unit,
     onClose: () -> Unit,
-    loadModels: suspend (provider: String, key: String) -> Result<List<String>> = { _, _ -> Result.success(emptyList()) },
+    deps: SettingsDeps = SettingsDeps(),
 ) {
     var s by remember(current) { mutableStateOf(current) }
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    var models by remember { mutableStateOf<List<String>>(emptyList()) }
-    var modelsNote by remember { mutableStateOf("") }
-    var loadingModels by remember { mutableStateOf(false) }
-    fun fetchModels() {
-        val key = if (s.llmProvider == AppSettings.PROVIDER_GEMINI) s.geminiKey.trim() else ""
-        if (s.llmProvider == AppSettings.PROVIDER_GEMINI && key.isBlank()) {
-            modelsNote = "ใส่ Gemini API key ก่อน"
-            return
-        }
-        loadingModels = true
-        modelsNote = ""
-        scope.launch {
-            loadModels(s.llmProvider, key)
-                .onSuccess { models = it; modelsNote = if (it.isEmpty()) "ไม่พบรุ่นที่ใช้ได้" else "" }
-                .onFailure { modelsNote = "ดึงรายชื่อไม่ได้: ${it.message?.take(160)}" }
-            loadingModels = false
-        }
+    var geminiOrder by remember { mutableStateOf<List<String>>(emptyList()) }
+    var geminiOk by remember { mutableStateOf(false) }
+    LaunchedEffect(s.geminiKey, geminiOk) {
+        geminiOrder = if (geminiOk) deps.geminiModels(s.geminiKey).getOrDefault(emptyList()) else emptyList()
     }
     BackHandler(onBack = onClose)
 
@@ -106,52 +92,51 @@ fun SettingsScreen(
                 )
                 SmallIcon(Icons.Rounded.Close, "ปิด", onClick = onClose)
             }
+            Hint("ทุกบริการใส่แค่ API key — แอปตรวจให้ทันทีว่าใช้ได้ไหม (● เขียว = ใช้ได้) แตะ \"ขอคีย์ ↗\" เพื่อไปขอคีย์ฟรี")
 
             Section("สมอง (โมเดลภาษา)")
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Chip("Gemini — ฟรี", selected = s.llmProvider == AppSettings.PROVIDER_GEMINI) {
-                    s = s.copy(llmProvider = AppSettings.PROVIDER_GEMINI); models = emptyList(); modelsNote = ""
+                    s = s.copy(llmProvider = AppSettings.PROVIDER_GEMINI)
                 }
                 Chip("OpenRouter", selected = s.llmProvider == AppSettings.PROVIDER_OPENROUTER) {
-                    s = s.copy(llmProvider = AppSettings.PROVIDER_OPENROUTER); models = emptyList(); modelsNote = ""
+                    s = s.copy(llmProvider = AppSettings.PROVIDER_OPENROUTER)
                 }
             }
             if (s.llmProvider == AppSettings.PROVIDER_GEMINI) {
-                Field("Gemini API key", s.geminiKey, secret = true) { s = s.copy(geminiKey = it) }
-                Hint("ขอคีย์ฟรีที่ aistudio.google.com → Get API key (ไม่ต้องผูกบัตร) · แผนฟรีของ Google อาจนำข้อความที่ส่งไปใช้ปรับปรุงบริการ และจำกัดจำนวนครั้งต่อนาที/ต่อวัน")
-                Field("รุ่น (ว่าง = เลือก Flash ล่าสุดให้เอง)", s.geminiModel) { s = s.copy(geminiModel = it) }
-            } else {
-                Field("Base URL", s.llmBaseUrl) { s = s.copy(llmBaseUrl = it) }
-                Field("Model", s.llmModel) { s = s.copy(llmModel = it) }
-                Hint("โมเดลที่ลงท้าย :free ใช้ฟรี (OpenRouter จำกัด 50 ครั้ง/วัน ถ้าเคยเติมเงิน 10 ดอลลาร์ขึ้นไปได้ 1,000 ครั้ง/วัน) · ~anthropic/claude-sonnet-latest = Claude แบบจ่ายตามใช้")
-                Field("OpenRouter API key", s.llmKey, secret = true) { s = s.copy(llmKey = it) }
-            }
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                HudButton(
-                    if (s.llmProvider == AppSettings.PROVIDER_GEMINI) "ดูรุ่นที่ใช้ได้" else "ดูโมเดลฟรี",
-                    enabled = !loadingModels,
-                    onClick = ::fetchModels,
-                )
-                if (loadingModels) Text("กำลังโหลด…", style = J.Small)
-                if (modelsNote.isNotBlank()) Text(modelsNote, style = J.Small.copy(color = J.Warn))
-            }
-            if (models.isNotEmpty()) {
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    val selected = if (s.llmProvider == AppSettings.PROVIDER_GEMINI) s.geminiModel else s.llmModel
-                    models.forEach { m ->
-                        Chip(m, selected = m == selected) {
-                            s = if (s.llmProvider == AppSettings.PROVIDER_GEMINI) s.copy(geminiModel = m) else s.copy(llmModel = m)
-                        }
+                KeyField(
+                    "Gemini API key", s.geminiKey, KeyService.GEMINI, deps.checkKey,
+                    note = "ฟรีจาก Google AI Studio ไม่ต้องผูกบัตร",
+                    onResult = { geminiOk = it?.ok == true },
+                ) { s = s.copy(geminiKey = it) }
+                if (geminiOrder.isNotEmpty()) {
+                    Text("รุ่น", style = J.Small)
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Chip("อัตโนมัติ (แนะนำ)", selected = s.geminiModel.isBlank()) { s = s.copy(geminiModel = "") }
+                        geminiOrder.forEach { m -> Chip(m, selected = s.geminiModel == m) { s = s.copy(geminiModel = m) } }
                     }
+                    Hint("อัตโนมัติ = เริ่มจากรุ่นใหม่สุด ถ้าไม่ว่างหรือโควตาเต็มจะสลับรุ่นถัดไปให้เอง · แผนฟรีของ Google อาจนำข้อความไปใช้ปรับปรุงบริการ")
                 }
+            } else {
+                KeyField(
+                    "OpenRouter API key", s.llmKey, KeyService.OPENROUTER, deps.checkKey,
+                    note = "รุ่นฟรีใช้ได้ด้วยคีย์ฟรี (50 ครั้ง/วัน)",
+                ) { s = s.copy(llmKey = it) }
+                OpenRouterPicker(s.llmModel, deps.openRouterModels) { s = s.copy(llmModel = it) }
             }
 
-            Section("ค้นเว็บ")
-            Field("Tavily API key", s.tavilyKey, secret = true) { s = s.copy(tavilyKey = it) }
+            Section("ค้นเว็บ + หาคลิป")
+            KeyField("Tavily API key", s.tavilyKey, KeyService.TAVILY, deps.checkKey, note = "ฟรี 1,000 เครดิต/เดือน ไม่ต้องผูกบัตร") {
+                s = s.copy(tavilyKey = it)
+            }
 
-            Section("ข้อมูลตลาดหุ้น")
-            Field("Finnhub API key (ราคา + ข่าว)", s.finnhubKey, secret = true) { s = s.copy(finnhubKey = it) }
-            Field("Twelve Data API key (กราฟ)", s.twelveDataKey, secret = true) { s = s.copy(twelveDataKey = it) }
+            Section("ข้อมูลตลาดหุ้น (ไม่ใส่ก็ได้)")
+            KeyField("Finnhub API key (ราคา + ข่าว)", s.finnhubKey, KeyService.FINNHUB, deps.checkKey, note = "ฟรีสำหรับใช้ส่วนตัว") {
+                s = s.copy(finnhubKey = it)
+            }
+            KeyField("Twelve Data API key (กราฟ)", s.twelveDataKey, KeyService.TWELVE_DATA, deps.checkKey, note = "ฟรี 800 ครั้ง/วัน") {
+                s = s.copy(twelveDataKey = it)
+            }
 
             Section("เสียง")
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -183,9 +168,11 @@ fun SettingsScreen(
             SwitchRow("ถูกเรียกตอนจอล็อก: แสดง Jarvis บนหน้าล็อกเลย", s.wakeOverLock) { s = s.copy(wakeOverLock = it) }
             var resumes by remember { mutableIntStateOf(0) }
             LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { resumes++ }
-            val canPop = remember(resumes) { Settings.canDrawOverlays(context) }
+            val canPop = remember(resumes) { runCatching { Settings.canDrawOverlays(context) }.getOrDefault(false) }
             val noDoze = remember(resumes) {
-                context.getSystemService(PowerManager::class.java)?.isIgnoringBatteryOptimizations(context.packageName) == true
+                runCatching {
+                    context.getSystemService(PowerManager::class.java)?.isIgnoringBatteryOptimizations(context.packageName) == true
+                }.getOrDefault(false)
             }
             PermissionRow("เด้งขึ้นมาเหนือแอปอื่นเมื่อถูกเรียก", canPop) {
                 runCatching {
@@ -205,25 +192,12 @@ fun SettingsScreen(
             Section("คลิปวิดีโอ")
             SwitchRow("เล่นคลิปในแผงอัตโนมัติ (ปิดเสียง)", s.autoplayVideos) { s = s.copy(autoplayVideos = it) }
 
-            Section("สมัครคีย์ (มีแพ็กเกจฟรี)")
-            listOf(
-                "Google AI Studio — สมองฟรี (Gemini)" to "https://aistudio.google.com/apikey",
-                "OpenRouter — โมเดลภาษา (มีรุ่นฟรี)" to "https://openrouter.ai",
-                "Tavily — ค้นเว็บ" to "https://app.tavily.com",
-                "Finnhub — ราคา/ข่าวหุ้น" to "https://finnhub.io",
-                "Twelve Data — กราฟราคา" to "https://twelvedata.com",
-            ).forEach { (label, url) ->
-                Text(
-                    "$label  ↗",
-                    style = TextStyle(fontFamily = J.Mono, fontSize = 14.sp, color = J.Accent),
-                    modifier = Modifier.clickable { context.openExternal(url, newWindow = false) }.padding(vertical = 4.dp),
-                )
-            }
             Hint("คีย์ทั้งหมดเข้ารหัสด้วย Android Keystore และเก็บไว้ในเครื่องนี้เท่านั้น")
 
             Spacer(Modifier.height(8.dp))
             Button(
-                onClick = { onSave(s) },
+                // ไม่มีช่องลิงก์ให้กรอกแล้ว — OpenRouter ใช้ที่อยู่มาตรฐานเสมอ
+                onClick = { onSave(s.copy(llmBaseUrl = AppSettings.DEFAULT_BASE_URL)) },
                 colors = ButtonDefaults.buttonColors(containerColor = J.Accent, contentColor = J.Bg),
                 modifier = Modifier.fillMaxWidth().height(48.dp),
             ) {
@@ -246,39 +220,6 @@ private fun Section(title: String) {
 @Composable
 private fun Hint(text: String) {
     Text(text, style = J.Small)
-}
-
-@Composable
-private fun Field(label: String, value: String, secret: Boolean = false, onChange: (String) -> Unit) {
-    var visible by remember { mutableStateOf(false) }
-    OutlinedTextField(
-        value = value,
-        onValueChange = onChange,
-        label = { Text(label) },
-        singleLine = true,
-        modifier = Modifier.fillMaxWidth(),
-        visualTransformation = if (secret && !visible) PasswordVisualTransformation() else VisualTransformation.None,
-        keyboardOptions = if (secret) KeyboardOptions(keyboardType = KeyboardType.Password) else KeyboardOptions.Default,
-        trailingIcon = if (secret) {
-            {
-                SmallIcon(
-                    if (visible) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility,
-                    if (visible) "ซ่อน" else "แสดง",
-                ) { visible = !visible }
-            }
-        } else {
-            null
-        },
-        colors = OutlinedTextFieldDefaults.colors(
-            focusedBorderColor = J.Accent,
-            unfocusedBorderColor = J.Line,
-            focusedTextColor = J.Text,
-            unfocusedTextColor = J.Text,
-            cursorColor = J.Accent,
-            focusedLabelColor = J.Accent,
-            unfocusedLabelColor = J.Muted,
-        ),
-    )
 }
 
 @Composable

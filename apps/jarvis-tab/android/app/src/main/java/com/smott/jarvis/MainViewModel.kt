@@ -12,6 +12,9 @@ import com.smott.jarvis.core.model.TurnStatus
 import com.smott.jarvis.core.net.HttpError
 import com.smott.jarvis.core.net.resultOf
 import com.smott.jarvis.core.voice.VoiceCommand
+import com.smott.jarvis.core.keys.KeyCheck
+import com.smott.jarvis.core.keys.KeyService
+import com.smott.jarvis.core.llm.ModelCatalog
 import com.smott.jarvis.core.voice.VoiceCommands
 import com.smott.jarvis.data.AppSettings
 import com.smott.jarvis.ui.narration
@@ -483,8 +486,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     suspend fun ogImage(url: String): String? = c.ogImage(url)
 
-    suspend fun modelChoices(provider: String, key: String): Result<List<String>> =
-        resultOf { c.modelChoices(provider, key) }
+    suspend fun checkKey(service: KeyService, key: String): KeyCheck = c.keys.check(service, key)
+
+    suspend fun geminiOrder(key: String): Result<List<String>> = resultOf { c.geminiOrder(key) }
+
+    suspend fun openRouterModels(): Result<List<ModelCatalog.Choice>> = resultOf { c.openRouterChoices() }
 
     override fun onCleared() {
         c.speech.cancel()

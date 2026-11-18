@@ -89,6 +89,9 @@ class LiveGeminiTest {
     @Test
     fun geminiFreeTierRunsJarvis() = runBlocking {
         if (!live) return@runBlocking
+        val check = com.smott.jarvis.core.keys.KeyChecker(http).check(com.smott.jarvis.core.keys.KeyService.GEMINI, key)
+        println("ตรวจคีย์: $check")
+        assertTrue(check.ok)
         val models = ModelCatalog.geminiModels(http, key)
         val order = ModelCatalog.geminiCandidates(models)
         println("ลำดับรุ่น: $order (จาก ${models.size} รุ่น)")

@@ -129,7 +129,9 @@ fun JarvisRoot(vm: MainViewModel, onMic: () -> Unit) {
                 settings,
                 onSave = vm::saveSettings,
                 onClose = { vm.openSettings(false) },
-                loadModels = { provider, key -> vm.modelChoices(provider, key) },
+                deps = remember(vm) {
+                    SettingsDeps(checkKey = vm::checkKey, geminiModels = vm::geminiOrder, openRouterModels = vm::openRouterModels)
+                },
             )
         }
     }
