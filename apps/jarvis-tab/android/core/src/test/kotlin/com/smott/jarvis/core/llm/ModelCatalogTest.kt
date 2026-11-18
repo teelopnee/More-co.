@@ -1,0 +1,76 @@
+package com.smott.jarvis.core.llm
+
+import com.smott.jarvis.core.agent.Agent
+import com.smott.jarvis.core.market.MarketService
+import com.smott.jarvis.core.net.Http
+import com.smott.jarvis.core.providers.FinnhubClient
+import com.smott.jarvis.core.providers.TwelveDataClient
+import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import okhttp3.Interceptor
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Protocol
+import okhttp3.Response
+import okhttp3.ResponseBody.Companion.toResponseBody
+import okio.Buffer
+import kotlin.test.Test
+import kotlin.test.assertEquals
+
+class ModelCatalogTest {
+    @Test
+    fun picksNewestStableFlash() {
+        val ids = listOf(
+            "gemini-2.5-flash", "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.8-flash-image", "gemini-3.8-flash-preview-tts",
+            "gemini-3.5-flash-lite", "gemini-4-hydrogen", "text-embedding-004", "gemini-3.8-flash-live", "imagen-4",
+        )
+        assertEquals("gemini-3.8-flash", ModelCatalog.pickGemini(ids))
+        assertEquals("gemini-3.5-flash-lite", ModelCatalog.pickGemini(listOf("gemini-3.5-flash-lite", "text-embedding-004")))
+        assertEquals("gemini-4-hydrogen", ModelCatalog.pickGemini(listOf("gemini-4-hydrogen", "imagen-4")))
+        assertEquals(null, ModelCatalog.pickGemini(listOf("imagen-4")))
+    }
+
+    @Test
+    fun readsFreeOpenRouterModelsThatCanUseTools() = runBlocking {
+        val body = """{"data":[
+          {"id":"a/big:free","context_length":1000000,"supported_parameters":["tools","tool_choice"]},
+          {"id":"b/small:free","context_length":8000,"supported_parameters":["tools","tool_choice"]},
+          {"id":"c/notools:free","context_length":2000000,"supported_parameters":["temperature"]},
+          {"id":"d/paid","context_length":3000000,"supported_parameters":["tools","tool_choice"]}
+        ]}"""
+        val http = Http(OkHttpClient.Builder().addInterceptor(Interceptor { chain ->
+            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(200).message("ok")
+                .body(body.toResponseBody("application/json".toMediaType())).build()
+        }).build())
+        assertEquals(listOf("a/big:free", "b/small:free"), ModelCatalog.openRouterFreeModels(http))
+    }
+
+    /** ผู้ให้บริการที่ไม่รับ tool_choice แบบระบุชื่อ (เช่นบางโมเดลฟรี) → ลดเป็น "required" แล้ว "auto" และจำไว้ */
+    @Test
+    fun fallsBackWhenForcedToolChoiceIsRejected() = runBlocking {
+        val sent = mutableListOf<String>()
+        val http = Http(OkHttpClient.Builder().addInterceptor(Interceptor { chain ->
+            val req = chain.request()
+            val json = Json.parseToJsonElement(Buffer().also { req.body!!.writeTo(it) }.readUtf8()).jsonObject
+            val choice = json["tool_choice"].toString()
+            sent += choice
+            val (code, text) = if (choice.startsWith("{")) {
+                400 to """{"error":{"message":"tool_choice with a specific function is not supported"}}"""
+            } else {
+                200 to """{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"x","type":"function","function":{"name":"present_briefing","arguments":"{\"title\":\"t\",\"spoken\":\"s\",\"overview\":\"ok\"}"}}]}}]}"""
+            }
+            Response.Builder().request(req).protocol(Protocol.HTTP_1_1).code(code).message("x")
+                .body(text.toResponseBody("application/json".toMediaType())).build()
+        }).build())
+        val llm = OpenAiCompatClient(http) { LlmConfig(ModelCatalog.GEMINI_BASE, "k", "gemini-x") }
+        val agent = Agent(llm, { emptyList() }, MarketService(FinnhubClient(http) { "" }, TwelveDataClient(http) { "" }), maxSteps = 1)
+        val r = agent.run("สวัสดี", emptyList()) {}
+        assertEquals("ok", r.briefing.overview?.headline)
+        assertEquals(listOf("{\"type\":\"function\",\"function\":{\"name\":\"present_briefing\"}}", "\"required\""), sent)
+        // ครั้งต่อไปใช้ "required" เลย ไม่ลองแบบที่ถูกปฏิเสธซ้ำ
+        agent.run("อีกครั้ง", emptyList()) {}
+        assertEquals("\"required\"", sent.last())
+        assertEquals(3, sent.size)
+    }
+}

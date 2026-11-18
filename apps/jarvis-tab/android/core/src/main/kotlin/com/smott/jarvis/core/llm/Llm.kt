@@ -3,6 +3,7 @@ package com.smott.jarvis.core.llm
 import com.smott.jarvis.core.ConfigException
 import com.smott.jarvis.core.JarvisJson
 import com.smott.jarvis.core.net.Http
+import com.smott.jarvis.core.net.HttpError
 import com.smott.jarvis.core.net.withRetry
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -120,13 +121,41 @@ class OpenAiCompatClient(
     private val config: () -> LlmConfig,
 ) : LlmClient {
 
+    /**
+     * บางผู้ให้บริการ/โมเดลฟรีไม่รองรับการบังคับเรียกเครื่องมือตัวใดตัวหนึ่ง (tool_choice แบบระบุชื่อ)
+     * ถ้าถูกปฏิเสธจะลดเป็น "required" แล้วเป็น "auto" และจำไว้ต่อโมเดล ไม่ต้องลองซ้ำทุกครั้ง
+     */
+    private val choiceLevel = java.util.concurrent.ConcurrentHashMap<String, Int>()
+
     override suspend fun complete(
         messages: List<ChatMessage>,
         tools: List<ToolDef>,
         toolChoice: JsonElement,
     ): ChatMessage {
         val cfg = config()
-        if (cfg.apiKey.isBlank()) throw ConfigException("ยังไม่ได้ใส่ API key ของโมเดล — เปิดหน้าตั้งค่าแล้วใส่คีย์ OpenRouter")
+        if (cfg.apiKey.isBlank()) throw ConfigException("ยังไม่ได้ใส่ API key ของสมอง — เปิดหน้าตั้งค่าแล้วใส่คีย์ (Gemini ใช้ฟรีได้)")
+        val key = cfg.baseUrl + "|" + cfg.model
+        val forced = toolChoice is JsonObject
+        var level = if (forced) choiceLevel[key] ?: 0 else 2
+        while (true) {
+            val choice: JsonElement = when {
+                !forced -> toolChoice
+                level == 0 -> toolChoice
+                level == 1 -> JsonPrimitive("required")
+                else -> JsonPrimitive("auto")
+            }
+            try {
+                return send(cfg, messages, tools, choice)
+            } catch (e: HttpError) {
+                val aboutTools = e.code in 400..422 && e.body.contains("tool", ignoreCase = true)
+                if (!forced || level >= 2 || !aboutTools) throw e
+                level++
+                choiceLevel[key] = level
+            }
+        }
+    }
+
+    private suspend fun send(cfg: LlmConfig, messages: List<ChatMessage>, tools: List<ToolDef>, toolChoice: JsonElement): ChatMessage {
         val request = ChatRequest(
             model = cfg.model,
             messages = messages,

@@ -125,7 +125,12 @@ fun JarvisRoot(vm: MainViewModel, onMic: () -> Unit) {
             )
         }
         if (settingsOpen) {
-            SettingsScreen(settings, onSave = vm::saveSettings, onClose = { vm.openSettings(false) })
+            SettingsScreen(
+                settings,
+                onSave = vm::saveSettings,
+                onClose = { vm.openSettings(false) },
+                loadModels = { provider, key -> vm.modelChoices(provider, key) },
+            )
         }
     }
 }

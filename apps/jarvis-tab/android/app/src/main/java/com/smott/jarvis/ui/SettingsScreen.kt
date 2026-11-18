@@ -43,6 +43,10 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.smott.jarvis.data.AppSettings
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import android.content.Intent
 import android.net.Uri
 import android.os.PowerManager
@@ -54,10 +58,35 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import com.smott.jarvis.ui.theme.J
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun SettingsScreen(current: AppSettings, onSave: (AppSettings) -> Unit, onClose: () -> Unit) {
+fun SettingsScreen(
+    current: AppSettings,
+    onSave: (AppSettings) -> Unit,
+    onClose: () -> Unit,
+    loadModels: suspend (provider: String, key: String) -> Result<List<String>> = { _, _ -> Result.success(emptyList()) },
+) {
     var s by remember(current) { mutableStateOf(current) }
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var models by remember { mutableStateOf<List<String>>(emptyList()) }
+    var modelsNote by remember { mutableStateOf("") }
+    var loadingModels by remember { mutableStateOf(false) }
+    fun fetchModels() {
+        val key = if (s.llmProvider == AppSettings.PROVIDER_GEMINI) s.geminiKey.trim() else ""
+        if (s.llmProvider == AppSettings.PROVIDER_GEMINI && key.isBlank()) {
+            modelsNote = "ใส่ Gemini API key ก่อน"
+            return
+        }
+        loadingModels = true
+        modelsNote = ""
+        scope.launch {
+            loadModels(s.llmProvider, key)
+                .onSuccess { models = it; modelsNote = if (it.isEmpty()) "ไม่พบรุ่นที่ใช้ได้" else "" }
+                .onFailure { modelsNote = "ดึงรายชื่อไม่ได้: ${it.message?.take(160)}" }
+            loadingModels = false
+        }
+    }
     BackHandler(onBack = onClose)
 
     Box(Modifier.fillMaxSize().background(J.Bg).blockTouches(), contentAlignment = Alignment.TopCenter) {
@@ -79,10 +108,43 @@ fun SettingsScreen(current: AppSettings, onSave: (AppSettings) -> Unit, onClose:
             }
 
             Section("สมอง (โมเดลภาษา)")
-            Field("Base URL", s.llmBaseUrl) { s = s.copy(llmBaseUrl = it) }
-            Field("Model", s.llmModel) { s = s.copy(llmModel = it) }
-            Hint("ค่าเริ่มต้น ~anthropic/claude-sonnet-latest = Claude Sonnet รุ่นล่าสุดบน OpenRouter (เปลี่ยนเป็นรุ่นอื่นที่รองรับ tool calling ได้)")
-            Field("OpenRouter API key", s.llmKey, secret = true) { s = s.copy(llmKey = it) }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Chip("Gemini — ฟรี", selected = s.llmProvider == AppSettings.PROVIDER_GEMINI) {
+                    s = s.copy(llmProvider = AppSettings.PROVIDER_GEMINI); models = emptyList(); modelsNote = ""
+                }
+                Chip("OpenRouter", selected = s.llmProvider == AppSettings.PROVIDER_OPENROUTER) {
+                    s = s.copy(llmProvider = AppSettings.PROVIDER_OPENROUTER); models = emptyList(); modelsNote = ""
+                }
+            }
+            if (s.llmProvider == AppSettings.PROVIDER_GEMINI) {
+                Field("Gemini API key", s.geminiKey, secret = true) { s = s.copy(geminiKey = it) }
+                Hint("ขอคีย์ฟรีที่ aistudio.google.com → Get API key (ไม่ต้องผูกบัตร) · แผนฟรีของ Google อาจนำข้อความที่ส่งไปใช้ปรับปรุงบริการ และจำกัดจำนวนครั้งต่อนาที/ต่อวัน")
+                Field("รุ่น (ว่าง = เลือก Flash ล่าสุดให้เอง)", s.geminiModel) { s = s.copy(geminiModel = it) }
+            } else {
+                Field("Base URL", s.llmBaseUrl) { s = s.copy(llmBaseUrl = it) }
+                Field("Model", s.llmModel) { s = s.copy(llmModel = it) }
+                Hint("โมเดลที่ลงท้าย :free ใช้ฟรี (OpenRouter จำกัด 50 ครั้ง/วัน ถ้าเคยเติมเงิน 10 ดอลลาร์ขึ้นไปได้ 1,000 ครั้ง/วัน) · ~anthropic/claude-sonnet-latest = Claude แบบจ่ายตามใช้")
+                Field("OpenRouter API key", s.llmKey, secret = true) { s = s.copy(llmKey = it) }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                HudButton(
+                    if (s.llmProvider == AppSettings.PROVIDER_GEMINI) "ดูรุ่นที่ใช้ได้" else "ดูโมเดลฟรี",
+                    enabled = !loadingModels,
+                    onClick = ::fetchModels,
+                )
+                if (loadingModels) Text("กำลังโหลด…", style = J.Small)
+                if (modelsNote.isNotBlank()) Text(modelsNote, style = J.Small.copy(color = J.Warn))
+            }
+            if (models.isNotEmpty()) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val selected = if (s.llmProvider == AppSettings.PROVIDER_GEMINI) s.geminiModel else s.llmModel
+                    models.forEach { m ->
+                        Chip(m, selected = m == selected) {
+                            s = if (s.llmProvider == AppSettings.PROVIDER_GEMINI) s.copy(geminiModel = m) else s.copy(llmModel = m)
+                        }
+                    }
+                }
+            }
 
             Section("ค้นเว็บ")
             Field("Tavily API key", s.tavilyKey, secret = true) { s = s.copy(tavilyKey = it) }
@@ -145,7 +207,8 @@ fun SettingsScreen(current: AppSettings, onSave: (AppSettings) -> Unit, onClose:
 
             Section("สมัครคีย์ (มีแพ็กเกจฟรี)")
             listOf(
-                "OpenRouter — โมเดลภาษา" to "https://openrouter.ai",
+                "Google AI Studio — สมองฟรี (Gemini)" to "https://aistudio.google.com/apikey",
+                "OpenRouter — โมเดลภาษา (มีรุ่นฟรี)" to "https://openrouter.ai",
                 "Tavily — ค้นเว็บ" to "https://app.tavily.com",
                 "Finnhub — ราคา/ข่าวหุ้น" to "https://finnhub.io",
                 "Twelve Data — กราฟราคา" to "https://twelvedata.com",

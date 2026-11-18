@@ -46,9 +46,11 @@ computer and writes in Thai; reply in Thai.
   - `apps/jarvis-tab/`: Jarvis Tab, a voice research assistant for the tablet (Kotlin + Compose in
     `android/`, `:core` is plain Kotlin). "Hey Jarvis" wake word runs on the device (openWakeWord models in
     `android/app/src/main/assets/wake`, CC BY-NC-SA = personal use; tested with real audio in
-    `android/core/src/test`), then OpenRouter + Tavily/Finnhub/Twelve Data with keys entered in the app.
-    `npm run build` runs `:core:test assembleRelease` and writes a download page like paewai-notch,
-    signed with the same `PAEWAI_KEYSTORE_*` secrets when present.
+    `android/core/src/test`). Everything can run on free plans: the brain defaults to Gemini's free tier
+    (model picked from Google's live list, never hard-coded) or OpenRouter `:free` models, plus
+    Tavily/Finnhub/Twelve Data free keys entered in the app. `npm run build` runs `:core:test assembleRelease`
+    on Java 21/17 (`JAVA_HOME_21_X64`; Kotlin 2.1 fails on the runner's default Java 25) and writes a
+    download page like paewai-notch, signed with the same `PAEWAI_KEYSTORE_*` secrets when present.
 - `docs/*.md`: design docs. `docs/odd-space-gdd.md` is the source of truth for the ODD-SPACE
   game (Godot 4); `docs/originals/*.docx` is a frozen copy, do not edit it.
 - `scripts/build-site.mjs`: installs, tests and builds every app into `_site/` and writes the

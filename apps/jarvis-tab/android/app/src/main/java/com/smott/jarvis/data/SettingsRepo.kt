@@ -14,6 +14,11 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
 data class AppSettings(
+    /** สมอง: "gemini" (ฟรี, คีย์จาก AI Studio) หรือ "openrouter" (โมเดลฟรี ":free" หรือแบบจ่ายตามใช้) */
+    val llmProvider: String = PROVIDER_GEMINI,
+    val geminiKey: String = "",
+    /** ว่าง = เลือกรุ่น Flash ล่าสุดให้อัตโนมัติจากรายชื่อของ Google */
+    val geminiModel: String = "",
     val llmBaseUrl: String = DEFAULT_BASE_URL,
     val llmModel: String = DEFAULT_MODEL,
     val llmKey: String = "",
@@ -34,7 +39,12 @@ data class AppSettings(
     /** เล่นคลิปในแผงอัตโนมัติ (ปิดเสียง) */
     val autoplayVideos: Boolean = true,
 ) {
+    /** คีย์ของสมองที่เลือกอยู่ */
+    val activeLlmKey: String get() = if (llmProvider == PROVIDER_GEMINI) geminiKey else llmKey
+
     companion object {
+        const val PROVIDER_GEMINI = "gemini"
+        const val PROVIDER_OPENROUTER = "openrouter"
         const val DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 
         /** ชื่อนี้บน OpenRouter จะชี้ไปที่ Claude Sonnet รุ่นล่าสุดเสมอ — เปลี่ยนได้ในหน้าตั้งค่า */
@@ -58,6 +68,11 @@ class SettingsRepo(context: Context) {
     private fun load(): AppSettings {
         val d = AppSettings()
         return AppSettings(
+            // ติดตั้งรุ่นก่อนแล้วมีคีย์ OpenRouter อยู่ = ใช้ต่อแบบเดิม; ติดตั้งใหม่ = Gemini ฟรี
+            llmProvider = prefs.getString(K_PROVIDER, null)
+                ?: if (prefs.getString(K_LLM, null).isNullOrEmpty()) d.llmProvider else AppSettings.PROVIDER_OPENROUTER,
+            geminiKey = secret(K_GEMINI),
+            geminiModel = prefs.getString(K_GEMINI_MODEL, null) ?: d.geminiModel,
             llmBaseUrl = prefs.getString(K_BASE, null) ?: d.llmBaseUrl,
             llmModel = prefs.getString(K_MODEL, null) ?: d.llmModel,
             llmKey = secret(K_LLM),
@@ -77,6 +92,9 @@ class SettingsRepo(context: Context) {
 
     private fun save(s: AppSettings) {
         prefs.edit()
+            .putString(K_PROVIDER, s.llmProvider)
+            .putString(K_GEMINI, box.encrypt(s.geminiKey.trim()))
+            .putString(K_GEMINI_MODEL, s.geminiModel.trim())
             .putString(K_BASE, s.llmBaseUrl.trim())
             .putString(K_MODEL, s.llmModel.trim())
             .putString(K_LLM, box.encrypt(s.llmKey.trim()))
@@ -97,6 +115,9 @@ class SettingsRepo(context: Context) {
     private fun secret(key: String): String = prefs.getString(key, null)?.let { box.decrypt(it) }.orEmpty()
 
     private companion object {
+        const val K_PROVIDER = "llm_provider"
+        const val K_GEMINI = "gemini_key"
+        const val K_GEMINI_MODEL = "gemini_model"
         const val K_BASE = "llm_base"
         const val K_MODEL = "llm_model"
         const val K_LLM = "llm_key"

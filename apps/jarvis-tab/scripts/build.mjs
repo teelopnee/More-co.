@@ -73,6 +73,14 @@ if (!sdk) {
 } else {
   const gradle = process.env.JARVIS_GRADLE || fetchGradle() || join(android, process.platform === 'win32' ? 'gradlew.bat' : 'gradlew');
   const env = { ...process.env, ANDROID_HOME: sdk, JARVIS_VERSION_CODE: String(versionCode), JARVIS_VERSION_NAME: versionName };
+  // Kotlin 2.1 + Gradle 8.14 run on Java 17–21; GitHub's runners default to a newer Java (25 fails with
+  // just "25.0.5"), but ship 21 and 17 side by side as JAVA_HOME_21_X64 / JAVA_HOME_17_X64.
+  const jdk = [process.env.JARVIS_JAVA_HOME, process.env.JAVA_HOME_21_X64, process.env.JAVA_HOME_17_X64].find((p) => p && existsSync(p));
+  if (jdk) {
+    env.JAVA_HOME = jdk;
+    env.PATH = `${join(jdk, 'bin')}${process.platform === 'win32' ? ';' : ':'}${env.PATH ?? ''}`;
+    console.log(`jarvis-tab: ใช้ Java จาก ${jdk}`);
+  }
   // The stable signing key comes from GitHub secrets (the same key as paewai-notch), never from the repo.
   if (process.env.PAEWAI_KEYSTORE_B64 && process.env.PAEWAI_KEYSTORE_PASSWORD) {
     keyDir = mkdtempSync(join(tmpdir(), 'jarvis-key-'));

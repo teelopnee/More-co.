@@ -27,6 +27,8 @@ import com.smott.jarvis.wake.WakeService
 import android.content.Intent
 import android.provider.Settings
 import com.smott.jarvis.core.tools.FindVideosTool
+import com.smott.jarvis.core.llm.ModelCatalog
+import com.smott.jarvis.data.AppSettings
 import okhttp3.OkHttpClient
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
@@ -65,8 +67,30 @@ class AppContainer(context: Context) {
 
     private val llm = OpenAiCompatClient(http) {
         val s = settings.state.value
-        LlmConfig(baseUrl = s.llmBaseUrl, apiKey = s.llmKey, model = s.llmModel)
+        if (s.llmProvider == AppSettings.PROVIDER_GEMINI) {
+            LlmConfig(baseUrl = ModelCatalog.GEMINI_BASE, apiKey = s.geminiKey, model = s.geminiModel.ifBlank { "gemini-flash-latest" })
+        } else {
+            LlmConfig(baseUrl = s.llmBaseUrl, apiKey = s.llmKey, model = s.llmModel)
+        }
     }
+
+    /** Gemini: ยังไม่ได้เลือกรุ่น → ดึงรายชื่อจาก Google แล้วเลือก Flash ล่าสุด (จำไว้ ไม่ดึงซ้ำ) */
+    suspend fun ensureModel() {
+        val s = settings.state.value
+        if (s.llmProvider != AppSettings.PROVIDER_GEMINI || s.geminiModel.isNotBlank() || s.geminiKey.isBlank()) return
+        val picked = runCatching { ModelCatalog.pickGemini(ModelCatalog.geminiModels(http, s.geminiKey)) }.getOrNull() ?: return
+        settings.update { it.copy(geminiModel = picked) }
+    }
+
+    /** รายชื่อรุ่นให้เลือกในหน้าตั้งค่า */
+    suspend fun modelChoices(provider: String, key: String): List<String> =
+        if (provider == AppSettings.PROVIDER_GEMINI) {
+            val ids = ModelCatalog.geminiModels(http, key)
+            val best = ModelCatalog.pickGemini(ids)
+            (listOfNotNull(best) + ids.filter { it.startsWith("gemini") && it.contains("flash") && it != best }).distinct().take(8)
+        } else {
+            ModelCatalog.openRouterFreeModels(http).take(8)
+        }
 
     private val device = DeviceTools(app)
     private val researchTools: List<Tool> = listOf(
