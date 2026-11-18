@@ -43,6 +43,12 @@ computer and writes in Thai; reply in Thai.
     (CI has both; without an SDK it builds only the download page). Never commit a signing key:
     the stable key comes from the `PAEWAI_KEYSTORE_B64` / `PAEWAI_KEYSTORE_PASSWORD` secrets; without
     them the APK is a debug-signed preview that cannot install over an earlier build.
+  - `apps/jarvis-tab/`: Jarvis Tab, a voice research assistant for the tablet (Kotlin + Compose in
+    `android/`, `:core` is plain Kotlin). "Hey Jarvis" wake word runs on the device (openWakeWord models in
+    `android/app/src/main/assets/wake`, CC BY-NC-SA = personal use; tested with real audio in
+    `android/core/src/test`), then OpenRouter + Tavily/Finnhub/Twelve Data with keys entered in the app.
+    `npm run build` runs `:core:test assembleRelease` and writes a download page like paewai-notch,
+    signed with the same `PAEWAI_KEYSTORE_*` secrets when present.
 - `docs/*.md`: design docs. `docs/odd-space-gdd.md` is the source of truth for the ODD-SPACE
   game (Godot 4); `docs/originals/*.docx` is a frozen copy, do not edit it.
 - `scripts/build-site.mjs`: installs, tests and builds every app into `_site/` and writes the
