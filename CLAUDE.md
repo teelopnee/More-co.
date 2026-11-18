@@ -39,8 +39,9 @@ computer and writes in Thai; reply in Thai.
   - `apps/paewai-notch/`: the same แปะไว้ as an Android app (Java, Gradle in `android/`) with a pill
     over the camera notch (accessibility overlay) and a drop-down panel; it bundles `../paewai/src`
     into the APK, so web changes ship in both. It also records voice natively (`RecorderService`,
-    foreground microphone service; Quick Settings tile and an "อัดเสียง" launcher icon for the side key). `npm run build` needs Java 17+ and `ANDROID_HOME`
-    (CI has both; without an SDK it builds only the download page). Never commit a signing key:
+    foreground microphone service; Quick Settings tile and an "อัดเสียง" launcher icon for the side key). `npm run build` needs Java 17–24 and `ANDROID_HOME`
+    (CI has both; build.mjs picks `JAVA_HOME_21_X64`/`17` because the runners' default Java 25 breaks
+    Gradle 8.14; without an SDK it builds only the download page). Never commit a signing key:
     the stable key comes from the `PAEWAI_KEYSTORE_B64` / `PAEWAI_KEYSTORE_PASSWORD` secrets; without
     them the APK is a debug-signed preview that cannot install over an earlier build.
   - `apps/jarvis-tab/`: Jarvis Tab, a voice research assistant for the tablet (Kotlin + Compose in

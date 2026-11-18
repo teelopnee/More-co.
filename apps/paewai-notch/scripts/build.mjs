@@ -82,6 +82,14 @@ if (!sdk) {
 } else {
   const gradle = process.env.PAEWAI_GRADLE || fetchGradle() || join(android, process.platform === 'win32' ? 'gradlew.bat' : 'gradlew');
   const env = { ...process.env, ANDROID_HOME: sdk, PAEWAI_VERSION_CODE: String(versionCode), PAEWAI_VERSION_NAME: versionName };
+  // Gradle 8.14 runs on Java 17–24; GitHub's runners now default to Java 25 ("Unsupported class file major
+  // version 69"), but ship 21 and 17 side by side as JAVA_HOME_21_X64 / JAVA_HOME_17_X64.
+  const jdk = [process.env.PAEWAI_JAVA_HOME, process.env.JAVA_HOME_21_X64, process.env.JAVA_HOME_17_X64].find((p) => p && existsSync(p));
+  if (jdk) {
+    env.JAVA_HOME = jdk;
+    env.PATH = `${join(jdk, 'bin')}${process.platform === 'win32' ? ';' : ':'}${env.PATH ?? ''}`;
+    console.log(`paewai-notch: ใช้ Java จาก ${jdk}`);
+  }
   // The stable signing key comes from a GitHub secret (base64 of the .p12), never from the repo.
   if (process.env.PAEWAI_KEYSTORE_B64 && process.env.PAEWAI_KEYSTORE_PASSWORD) {
     keyDir = mkdtempSync(join(tmpdir(), 'paewai-key-'));
