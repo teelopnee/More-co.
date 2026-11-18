@@ -51,7 +51,7 @@ class KeyCheckerTest {
     @Test
     fun goodKeysShowUsefulDetails() = runBlocking {
         val g = good.check(KeyService.GEMINI, " AIza-good ")
-        assertTrue(g.ok); assertTrue("gemini-3.8-flash" in g.message, g.message)
+        assertTrue(g.ok); assertTrue("gemini-3.5-flash-lite" in g.message, g.message)
         val o = good.check(KeyService.OPENROUTER, "sk-or-good")
         assertTrue(o.ok); assertTrue("บัญชีฟรี" in o.message, o.message)
         val t = good.check(KeyService.TAVILY, "tvly-good")

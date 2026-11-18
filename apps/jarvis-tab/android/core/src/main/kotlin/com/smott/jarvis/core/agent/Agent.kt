@@ -1,5 +1,6 @@
 package com.smott.jarvis.core.agent
 
+import com.smott.jarvis.core.ConfigException
 import com.smott.jarvis.core.JarvisJson
 import com.smott.jarvis.core.llm.ChatMessage
 import com.smott.jarvis.core.llm.LlmClient
@@ -12,6 +13,7 @@ import com.smott.jarvis.core.model.AnalysisBlock
 import com.smott.jarvis.core.model.Briefing
 import com.smott.jarvis.core.model.ChartRange
 import com.smott.jarvis.core.model.ChartSpec
+import com.smott.jarvis.core.model.Cited
 import com.smott.jarvis.core.model.MediaImage
 import com.smott.jarvis.core.model.NewsRef
 import com.smott.jarvis.core.model.Overview
@@ -21,6 +23,7 @@ import com.smott.jarvis.core.model.Source
 import com.smott.jarvis.core.model.SourceKind
 import com.smott.jarvis.core.model.TraceStep
 import com.smott.jarvis.core.model.Turn
+import com.smott.jarvis.core.net.HttpError
 import com.smott.jarvis.core.net.resultOf
 import com.smott.jarvis.core.tools.Tool
 import com.smott.jarvis.core.tools.finnhubSource
@@ -48,12 +51,17 @@ data class AgentResult(
  * วงจรการทำงาน 1 คำถาม:
  * คิด → เรียกเครื่องมือ (ค้นเว็บ/ราคา/ข่าว พร้อมกันได้) → คิดต่อ … → present_briefing
  * จากนั้นตรวจคำตอบ: ตัดที่มาที่ไม่มีจริง และดึงตัวเลขกราฟ/ราคาที่ยังขาดจาก API เอง
+ *
+ * มีเพดานเสมอ ไม่ให้ค้นวนนานเป็นนาที ๆ: ค้นได้ไม่เกิน [maxRounds] รอบ หรือ [researchBudgetMs]
+ * เมื่อถึงเพดานจะสั่งให้สรุปจากข้อมูลที่มีทันที
  */
 class Agent(
     private val llm: LlmClient,
     private val tools: () -> List<Tool>,
     private val market: MarketService,
-    private val maxSteps: Int = 10,
+    private val maxSteps: Int = 6,
+    private val maxRounds: Int = 3,
+    private val researchBudgetMs: Long = 60_000L,
 ) {
     suspend fun run(
         question: String,
@@ -85,9 +93,17 @@ class Agent(
         var briefing: Briefing? = null
         var mustFinish = false
         var lastText = ""
+        var rounds = 0
+        var llmFailed = false
+        val started = System.currentTimeMillis()
 
         for (step in 0 until maxSteps) {
-            val forceFinal = mustFinish || step == maxSteps - 1
+            val outOfTime = step > 0 && (rounds >= maxRounds || System.currentTimeMillis() - started > researchBudgetMs)
+            if (outOfTime && !mustFinish) {
+                // ถึงเพดานแล้ว: บอกโมเดลตรง ๆ ด้วย (บางรุ่นไม่ทำตาม tool_choice ที่บังคับ)
+                messages += ChatMessage(role = "user", content = "Time is up. Answer now: call ${BriefingSchema.NAME} using only what you already found.")
+            }
+            val forceFinal = mustFinish || outOfTime || step == maxSteps - 1
             val label = when {
                 step == 0 -> "วางแผน"
                 forceFinal -> "จัดหน้าสรุป"
@@ -104,7 +120,10 @@ class Agent(
                 throw e
             } catch (e: Exception) {
                 trace.fail(idx, "")
-                throw e
+                // ค้นมาได้แล้วแต่สมองล่มตอนสรุป → แสดงสิ่งที่ค้นเจอแทนการขึ้นข้อผิดพลาดเปล่า ๆ
+                if (!salvageable(e, ctx)) throw e
+                llmFailed = true
+                break
             }
             trace.done(idx)
 
@@ -155,14 +174,17 @@ class Agent(
                     }
                 }.awaitAll()
             }
-            if (calls.any { byName[it.function.name]?.device == false }) readWeb = true
+            if (calls.any { byName[it.function.name]?.device == false }) {
+                readWeb = true
+                rounds++
+            }
             calls.zip(results).forEach { (call, result) ->
                 messages += ChatMessage(role = "tool", toolCallId = call.id, content = result)
             }
         }
 
-        val raw = briefing ?: fallback(question, lastText)
-        val finished = finish(raw, ctx, trace)
+        val raw = briefing ?: if (llmFailed) partial(question, ctx) else fallback(question, lastText)
+        val finished = finish(raw.copy(title = raw.title.trim().ifBlank { question.take(80) }), ctx, trace)
         ctx.onChange = null
         return AgentResult(finished, ctx.newSources(), ctx.quotes(), ctx.allSeries(), ctx.images())
     }
@@ -193,6 +215,25 @@ class Agent(
         val obj = element["briefing"] as? JsonObject ?: element
         return runCatching { JarvisJson.decodeFromJsonElement(Briefing.serializer(), obj) }.getOrNull()
             ?.takeIf { it.title.isNotBlank() || it.overview != null || it.analysis.isNotEmpty() }
+    }
+
+    private fun salvageable(e: Exception, ctx: ResearchContext): Boolean {
+        if (e is ConfigException) return false
+        if (e is HttpError && e.code in 400..403) return false
+        return ctx.newSources().any { it.kind != SourceKind.DATA }
+    }
+
+    private fun partial(question: String, ctx: ResearchContext): Briefing {
+        val found = ctx.newSources().filter { it.kind == SourceKind.WEB || it.kind == SourceKind.NEWS }.take(6)
+        return Briefing(
+            title = question.take(80),
+            spoken = "ผมค้นข้อมูลมาได้แล้ว แต่สมอง AI ไม่ว่างตอนสรุป เลยแสดงแหล่งข้อมูลที่เจอไว้ให้ก่อนครับ",
+            overview = Overview(
+                headline = "สมอง AI ไม่ว่างตอนสรุป — นี่คือแหล่งข้อมูลที่ค้นเจอ (แตะคำถามด้านล่างเพื่อถามซ้ำ)",
+                points = found.map { Cited(text = it.title.take(160), sources = listOf(it.id)) },
+            ),
+            followUps = listOf(question),
+        )
     }
 
     private fun fallback(question: String, text: String): Briefing = Briefing(
@@ -297,6 +338,6 @@ class Agent(
 
     private companion object {
         const val MAX_PARALLEL = 8
-        const val TOOL_TIMEOUT_MS = 45_000L
+        const val TOOL_TIMEOUT_MS = 25_000L
     }
 }

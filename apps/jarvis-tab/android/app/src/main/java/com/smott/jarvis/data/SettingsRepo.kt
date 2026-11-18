@@ -17,7 +17,7 @@ data class AppSettings(
     /** สมอง: "gemini" (ฟรี, คีย์จาก AI Studio) หรือ "openrouter" (โมเดลฟรี ":free" หรือแบบจ่ายตามใช้) */
     val llmProvider: String = PROVIDER_GEMINI,
     val geminiKey: String = "",
-    /** ว่าง = เลือกรุ่น Flash ล่าสุดให้อัตโนมัติจากรายชื่อของ Google */
+    /** ว่าง = เลือกรุ่นให้อัตโนมัติจากรายชื่อของ Google (Flash-Lite ล่าสุดก่อน แล้วสลับกับ Flash) */
     val geminiModel: String = "",
     val llmBaseUrl: String = DEFAULT_BASE_URL,
     val llmModel: String = DEFAULT_MODEL,

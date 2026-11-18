@@ -25,7 +25,7 @@ mkdirSync(out, { recursive: true });
 const sha = (process.env.GITHUB_SHA ?? spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).stdout ?? '').trim().slice(0, 7);
 const now = new Date();
 const versionCode = Math.floor((now.getTime() - Date.UTC(2026, 0, 1)) / 60_000);
-const versionName = `0.3-${now.toISOString().slice(0, 10).replace(/-/g, '.')}${sha ? `-${sha}` : ''}`;
+const versionName = `0.4-${now.toISOString().slice(0, 10).replace(/-/g, '.')}${sha ? `-${sha}` : ''}`;
 
 /**
  * The wrapper's own downloader stalls on services.gradle.org's redirect (seen on GitHub's runners),

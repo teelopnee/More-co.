@@ -165,7 +165,7 @@ fun RunTile(turn: Turn, modifier: Modifier = Modifier) {
         Spacer(Modifier.height(6.dp))
         Text(line.uppercase(), style = J.Small.copy(color = J.Muted), maxLines = 2, overflow = TextOverflow.Ellipsis)
         Spacer(Modifier.height(10.dp))
-        SegmentBar(filled = done, total = 10, blinkNext = failed == 0 || done < steps.size)
+        SegmentBar(filled = done.coerceAtMost(9), total = 10, blinkNext = failed == 0 || done < steps.size)
         Spacer(Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
             val blocks = turn.sources.count { it.videoId != null } + turn.images.size
@@ -175,7 +175,12 @@ fun RunTile(turn: Turn, modifier: Modifier = Modifier) {
             if (failed > 0) Text("$failed FAILED", style = J.Label.copy(color = J.Down))
         }
         Spacer(Modifier.height(4.dp))
-        Text("STARTED ${clock(turn.askedAt)}", style = J.Small.copy(color = J.Faint, fontSize = 9.sp))
+        Text(
+            "STARTED ${clock(turn.askedAt)} · ปิดแอปได้ จะแจ้งเตือนเมื่อเสร็จ",
+            style = J.Small.copy(color = J.Faint, fontSize = 9.sp),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 

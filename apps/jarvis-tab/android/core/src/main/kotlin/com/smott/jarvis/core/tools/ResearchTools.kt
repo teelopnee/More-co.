@@ -21,7 +21,7 @@ class WebSearchTool(private val tavily: TavilyClient) : Tool {
         "query" to Schema.str("Search query"),
         "topic" to Schema.str("general or news", listOf("general", "news")),
         "time_range" to Schema.str("Only results from this recent period", listOf("day", "week", "month", "year")),
-        "max_results" to Schema.int("Number of results, default 6", 1, 8),
+        "max_results" to Schema.int("Number of results, default 5", 1, 8),
         required = listOf("query"),
     )
     override val available: Boolean get() = tavily.available
@@ -33,7 +33,7 @@ class WebSearchTool(private val tavily: TavilyClient) : Tool {
         val query = args.str("query") ?: return "ERROR: query is required"
         val topic = if (args.str("topic") == "news") "news" else "general"
         val timeRange = args.str("time_range")?.takeIf { it in setOf("day", "week", "month", "year") }
-        val max = (args.int("max_results") ?: 6).coerceIn(1, 8)
+        val max = (args.int("max_results") ?: 5).coerceIn(1, 8)
 
         // ขอภาพประกอบมาด้วย (แอปใช้แสดงเป็นแผงภาพบนจอ ไม่ส่งให้โมเดล)
         val response = tavily.searchFull(query, topic, timeRange, max, includeImages = true)
@@ -55,7 +55,8 @@ class WebSearchTool(private val tavily: TavilyClient) : Tool {
                     put("title", src.title)
                     put("publisher", src.publisher)
                     src.publishedAt?.let { put("date", isoTime(it)) }
-                    put("snippet", r.content.take(700))
+                    // ตัดให้สั้นพอ: ข้อความยิ่งยาว โมเดลยิ่งอ่านช้า
+                    put("snippet", r.content.take(500))
                 }
             }
         }.toString()
@@ -97,7 +98,7 @@ class ReadPageTool(private val tavily: TavilyClient, private val reader: PageRea
         return buildJsonObject {
             put("id", source.id)
             put("title", source.title)
-            put("content", content.take(7_000))
+            put("content", content.take(5_000))
         }.toString()
     }
 }

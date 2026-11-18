@@ -9,6 +9,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- ค้นคำตอบต่อได้แม้ปิดแอป (foreground service ระหว่างค้น + แจ้งเตือนเมื่อเสร็จ) -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <!-- เปิดจอเมื่อถูกเรียกตอนจอดับ -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.TURN_SCREEN_ON" />
@@ -80,5 +82,10 @@
             android:name=".wake.WakeService"
             android:exported="false"
             android:foregroundServiceType="microphone" />
+
+        <service
+            android:name=".research.ResearchService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
     </application>
 </manifest>

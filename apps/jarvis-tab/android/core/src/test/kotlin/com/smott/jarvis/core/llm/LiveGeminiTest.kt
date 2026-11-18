@@ -44,9 +44,17 @@ class LiveGeminiTest {
                 val sent = Buffer().also { req.body!!.writeTo(it) }.readUtf8()
                 val model = Regex("\"model\":\"([^\"]+)\"").find(sent)?.groupValues?.get(1)
                 val choice = Regex("\"tool_choice\":(\\{[^}]*\\}\\}|\"[a-z]+\")").find(sent)?.groupValues?.get(1) ?: "-"
-                llmCalls += "$model $choice"
-                val res = chain.proceed(req)
-                llmCalls[llmCalls.lastIndex] = "${llmCalls.last()} → ${res.code}"
+                val effort = Regex("\"reasoning_effort\":\"([a-z]+)\"").find(sent)?.groupValues?.get(1) ?: "-"
+                val at = System.currentTimeMillis()
+                println("→ $model choice=$choice effort=$effort ${sent.length}B")
+                val res = try {
+                    chain.proceed(req)
+                } catch (e: Exception) {
+                    println("  ✗ $model ${e.javaClass.simpleName} หลัง ${System.currentTimeMillis() - at}ms")
+                    throw e
+                }
+                println("  ← $model ${res.code} ใน ${System.currentTimeMillis() - at}ms")
+                llmCalls += "$model $choice → ${res.code} ${(System.currentTimeMillis() - at) / 1000}s"
                 return@Interceptor res
             }
             return@Interceptor chain.proceed(req)
@@ -97,9 +105,10 @@ class LiveGeminiTest {
         println("ลำดับรุ่น: $order (จาก ${models.size} รุ่น)")
         val a = agent(order.first(), order.drop(1))
 
+        val t1 = System.currentTimeMillis()
         val r1 = a.run("สรุปสถานะตลาดแว่น VR ตอนนี้ให้หน่อย มีคลิปด้วยยิ่งดี", emptyList()) {}
         val b1 = r1.briefing
-        println("1) ${b1.title} | ${b1.overview?.headline}")
+        println("1) ${(System.currentTimeMillis() - t1) / 1000}s · ${b1.title} | ${b1.overview?.headline}")
         println("   stats=${b1.stats.map { it.value }} sections=${b1.analysis.map { it.heading }} videos=${b1.videos.map { it.sourceId }} figures=${b1.figures.map { it.title }}")
         println("   spoken=${b1.spoken}")
         println("   sources=${r1.newSources.map { "${it.id}:${it.kind}" }} cited=${b1.citedIds()}")

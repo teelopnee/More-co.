@@ -4,7 +4,12 @@ import com.smott.jarvis.core.ConfigException
 import com.smott.jarvis.core.JarvisJson
 import com.smott.jarvis.core.net.Http
 import com.smott.jarvis.core.net.HttpError
-import com.smott.jarvis.core.net.withRetry
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
+import java.io.IOException
+import java.io.InterruptedIOException
+import java.net.UnknownHostException
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.serializer
@@ -82,6 +87,8 @@ data class ChatRequest(
     @SerialName("tool_choice") val toolChoice: JsonElement? = null,
     val temperature: Double = 0.3,
     @SerialName("max_tokens") val maxTokens: Int = 6000,
+    /** Gemini: "low" = คิดสั้นลง ตอบเร็วขึ้นราว 2 เท่า (วัดจริง พ.ย. 2026) — ผู้ให้บริการอื่นไม่ส่งช่องนี้ */
+    @SerialName("reasoning_effort") val reasoningEffort: String? = null,
 )
 
 @Serializable
@@ -124,8 +131,15 @@ object ArgsFlex : JsonTransformingSerializer<String>(String.serializer()) {
     }
 }
 
+/**
+ * perModelTimeoutMs = รอรุ่นหนึ่งได้นานสุดเท่าไรเมื่อยังมีรุ่นสำรอง
+ * callBudgetMs = เวลารวมของการถาม 1 ครั้ง (ทุกรุ่นรวมกัน) — ไม่ให้ค้างนานเป็นนาที ๆ เมื่อทุกรุ่นช้า
+ */
 class OpenAiCompatClient(
     private val http: Http,
+    private val perModelTimeoutMs: Long = 30_000L,
+    private val callBudgetMs: Long = 75_000L,
+    private val netRetryDelayMs: Long = 1_500L,
     private val config: () -> LlmConfig,
 ) : LlmClient {
 
@@ -135,6 +149,12 @@ class OpenAiCompatClient(
      */
     private val choiceLevel = java.util.concurrent.ConcurrentHashMap<String, Int>()
 
+    /** รุ่นที่ไม่รับ reasoning_effort (จำไว้ ไม่ส่งอีก) */
+    private val noReasoning = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    /** รุ่นที่เพิ่งไม่ว่างจะถูกข้ามไปชั่วคราว 10 นาที แล้วค่อยกลับมาลองใหม่ */
+    private val busyUntil = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
     override suspend fun complete(
         messages: List<ChatMessage>,
         tools: List<ToolDef>,
@@ -143,41 +163,122 @@ class OpenAiCompatClient(
         val base = config()
         if (base.apiKey.isBlank()) throw ConfigException("ยังไม่ได้ใส่ API key ของสมอง — เปิดหน้าตั้งค่าแล้วใส่คีย์ (Gemini ใช้ฟรีได้)")
         val models = (listOf(base.model) + base.fallbacks).filter { it.isNotBlank() }.distinct()
-        // รุ่นที่เพิ่งไม่ว่างจะถูกข้ามไปชั่วคราว 10 นาที แล้วค่อยกลับมาลองใหม่
         val now = System.currentTimeMillis()
-        val ordered = models.filter { (busyUntil[base.baseUrl + "|" + it] ?: 0L) <= now } + models.filter { (busyUntil[base.baseUrl + "|" + it] ?: 0L) > now }
+        fun key(model: String) = base.baseUrl + "|" + model
+        val ordered = models.filter { (busyUntil[key(it)] ?: 0L) <= now } + models.filter { (busyUntil[key(it)] ?: 0L) > now }
+        val started = System.currentTimeMillis()
         var last: Exception? = null
-        for ((i, model) in ordered.withIndex()) {
-            // มีรุ่นสำรอง = ไม่ลองรุ่นเดิมซ้ำ เปลี่ยนรุ่นเลย (เร็วกว่าและได้ผลกว่าเมื่อรุ่นนั้นคนใช้เยอะ)
-            val hasNext = i < ordered.lastIndex
-            val retries = if (hasNext) 0 else 1
-            try {
-                if (!hasNext) return completeWith(base.copy(model = model), messages, tools, toolChoice, retries)
-                // ยังมีรุ่นสำรอง: รอได้ไม่เกิน 60 วินาที (แผนฟรีบางครั้งค้างเงียบ ๆ จนหมดเวลา 2 นาที)
-                val reply = kotlinx.coroutines.withTimeoutOrNull(PER_MODEL_TIMEOUT_MS) {
-                    completeWith(base.copy(model = model), messages, tools, toolChoice, retries)
+        var timedOut = 0
+        var queue = ordered
+        var pass = 0
+        // แผนฟรีมักตอบ 503 "high demand" แบบชั่วครู่ → วนลองรุ่นที่ตอบ 503 อีกรอบได้ จนหมดเวลารวม
+        while (queue.isNotEmpty()) {
+            val again = mutableListOf<String>()
+            for ((i, model) in queue.withIndex()) {
+                val left = callBudgetMs - (System.currentTimeMillis() - started)
+                if ((pass > 0 || i > 0) && left < minOf(MIN_ATTEMPT_MS, perModelTimeoutMs / 4)) return giveUp(last, timedOut, started)
+                // มีรุ่นเดียว (เช่นรุ่นเสียเงินบน OpenRouter) ให้เวลาเต็มที่ มีรุ่นสำรอง = ไม่รอรุ่นที่ค้าง
+                val limit = if (ordered.size == 1) left else minOf(perModelTimeoutMs, left)
+                try {
+                    val reply = withTimeoutOrNull(limit) {
+                        attempt(base.copy(model = model), messages, tools, toolChoice)
+                    }
+                    if (reply != null) {
+                        busyUntil.remove(key(model))
+                        return reply
+                    }
+                    busyUntil[key(model)] = System.currentTimeMillis() + SLOW_BUSY_MS
+                    timedOut++
+                    last = LlmException("$model ไม่ตอบใน ${limit / 1000} วินาที")
+                } catch (e: HttpError) {
+                    if (!busy(e)) throw e
+                    // 404 = รุ่นถูกปิดไปแล้ว ไม่ต้องลองอีก
+                    val wait = if (e.code == 404) GONE_MS else quotaWaitMs(e)
+                    busyUntil[key(model)] = System.currentTimeMillis() + (wait ?: SHORT_BUSY_MS)
+                    if (wait == null) again += model
+                    last = e
+                } catch (e: InterruptedIOException) {
+                    // อ่านคำตอบไม่ทันเวลาของ OkHttp = รุ่นนี้แน่นอยู่
+                    busyUntil[key(model)] = System.currentTimeMillis() + SLOW_BUSY_MS
+                    timedOut++
+                    last = e
+                } catch (e: IOException) {
+                    // เน็ตหลุดซ้ำหลายครั้ง (ลองใหม่ในรุ่นเดิมแล้ว) — ไม่ใช่ความผิดของรุ่น
+                    again += model
+                    last = e
                 }
-                if (reply != null) return reply
-                busyUntil[base.baseUrl + "|" + model] = System.currentTimeMillis() + 10 * 60_000L
-                last = java.io.InterruptedIOException("$model ไม่ตอบใน ${PER_MODEL_TIMEOUT_MS / 1000} วินาที")
-            } catch (e: HttpError) {
-                if (!busy(e)) throw e
-                busyUntil[base.baseUrl + "|" + model] = System.currentTimeMillis() + 10 * 60_000L
-                last = e
-            } catch (e: java.io.InterruptedIOException) {
-                // ตอบช้าจนหมดเวลา = รุ่นนี้แน่นอยู่ ลองรุ่นถัดไป
-                if (i == ordered.lastIndex) throw e
-                busyUntil[base.baseUrl + "|" + model] = System.currentTimeMillis() + 10 * 60_000L
-                last = e
             }
+            if (again.isEmpty() || ++pass >= MAX_PASSES) break
+            delay(PASS_DELAY_MS)
+            queue = again
+        }
+        return giveUp(last, timedOut, started)
+    }
+
+    private fun giveUp(last: Exception?, timedOut: Int, started: Long): Nothing {
+        if (timedOut > 0 && (last !is HttpError || last.code >= 500)) {
+            val secs = (System.currentTimeMillis() - started) / 1000
+            throw LlmException("สมอง AI ตอบช้าเกินไป (รอแล้ว $secs วินาที) — ช่วงนี้รุ่นฟรีคนใช้เยอะ ลองใหม่อีกครั้ง")
         }
         throw last ?: LlmException("โมเดลไม่ส่งคำตอบกลับมา")
     }
 
-    private val busyUntil = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    /**
+     * 429 ของโควตารายวัน (แผนฟรี Gemini 3.8 Flash ได้แค่ 20 ครั้ง/วัน) → พักรุ่นนั้นจนโควตารีเซ็ต
+     * 429 รายนาที → null (ลองรอบถัดไปได้)
+     */
+    private fun quotaWaitMs(e: HttpError): Long? {
+        if (e.code != 429) return null
+        val daily = e.body.contains("per day", true) || e.body.contains("PerDay", true)
+        if (!daily) return null
+        val m = Regex("retry in (?:(\\d+)h)?(?:(\\d+)m)?(?:([\\d.]+)s)?", RegexOption.IGNORE_CASE).find(e.body)
+        val ms = m?.let {
+            val (h, min, sec) = it.destructured
+            (h.toLongOrNull() ?: 0) * 3_600_000 + (min.toLongOrNull() ?: 0) * 60_000 + ((sec.toDoubleOrNull() ?: 0.0) * 1000).toLong()
+        }?.takeIf { it > 0 }
+        return (ms ?: 6 * 3_600_000L).coerceAtMost(24 * 3_600_000L)
+    }
+
+    /**
+     * ส่ง 1 ครั้งกับรุ่นเดียว: เน็ตสะดุด (เช่น "Software caused connection abort" ตอนสลับแอป/สลับ Wi-Fi)
+     * ลองใหม่ในรุ่นเดิมได้ 2 ครั้ง
+     */
+    private suspend fun attempt(
+        cfg: LlmConfig,
+        messages: List<ChatMessage>,
+        tools: List<ToolDef>,
+        toolChoice: JsonElement,
+    ): ChatMessage {
+        var net = 0
+        while (true) {
+            try {
+                return completeWith(cfg, messages, tools, toolChoice)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: HttpError) {
+                throw e
+            } catch (e: InterruptedIOException) {
+                throw e
+            } catch (e: UnknownHostException) {
+                if (net++ >= 1) throw e
+                delay(netRetryDelayMs)
+            } catch (e: IOException) {
+                if (net++ >= NET_RETRIES) throw e
+                delay(netRetryDelayMs * net)
+            }
+        }
+    }
 
     private companion object {
-        const val PER_MODEL_TIMEOUT_MS = 60_000L
+        /** 503/500 ชั่วครู่ */
+        const val SHORT_BUSY_MS = 90_000L
+        /** ค้างเงียบจนหมดเวลา */
+        const val SLOW_BUSY_MS = 5 * 60_000L
+        const val GONE_MS = 6 * 3_600_000L
+        const val MIN_ATTEMPT_MS = 8_000L
+        const val NET_RETRIES = 2
+        const val MAX_PASSES = 3
+        const val PASS_DELAY_MS = 1_500L
     }
 
     /** รุ่นนี้ไม่ว่างชั่วคราว (ล่ม/คนใช้เยอะ) หรือโควตาของรุ่นนี้หมด — แผนฟรีโควตาแยกต่อรุ่น จึงลองรุ่นอื่นได้ */
@@ -190,7 +291,6 @@ class OpenAiCompatClient(
         messages: List<ChatMessage>,
         tools: List<ToolDef>,
         toolChoice: JsonElement,
-        retries: Int,
     ): ChatMessage {
         val key = cfg.baseUrl + "|" + cfg.model
         val forced = toolChoice is JsonObject
@@ -202,9 +302,14 @@ class OpenAiCompatClient(
                 level == 1 -> JsonPrimitive("required")
                 else -> JsonPrimitive("auto")
             }
+            val effort = if (cfg.baseUrl.trimEnd('/') == ModelCatalog.GEMINI_BASE && key !in noReasoning) "low" else null
             try {
-                return send(cfg, messages, tools, choice, retries)
+                return send(cfg, messages, tools, choice, effort)
             } catch (e: HttpError) {
+                if (effort != null && e.code == 400 && (e.body.contains("reasoning", true) || e.body.contains("thinking", true))) {
+                    noReasoning += key
+                    continue
+                }
                 val aboutTools = e.code in 400..422 && e.body.contains("tool", ignoreCase = true)
                 if (!forced || level >= 2 || !aboutTools) throw e
                 level++
@@ -213,12 +318,13 @@ class OpenAiCompatClient(
         }
     }
 
-    private suspend fun send(cfg: LlmConfig, messages: List<ChatMessage>, tools: List<ToolDef>, toolChoice: JsonElement, retries: Int): ChatMessage {
+    private suspend fun send(cfg: LlmConfig, messages: List<ChatMessage>, tools: List<ToolDef>, toolChoice: JsonElement, effort: String?): ChatMessage {
         val request = ChatRequest(
             model = cfg.model,
             messages = messages,
             tools = tools.ifEmpty { null },
             toolChoice = if (tools.isEmpty()) null else toolChoice,
+            reasoningEffort = effort,
         )
         val body = JarvisJson.encodeToString(ChatRequest.serializer(), request)
         val url = cfg.baseUrl.trimEnd('/') + "/chat/completions"
@@ -226,7 +332,7 @@ class OpenAiCompatClient(
             "Authorization" to "Bearer ${cfg.apiKey}",
             "X-Title" to "Jarvis Tab",
         )
-        val text = withRetry(retries = retries) { http.postJson(url, body, headers) }
+        val text = http.postJson(url, body, headers)
         val response = JarvisJson.decodeFromString(ChatResponse.serializer(), text)
         response.error?.let { throw LlmException("โมเดลแจ้งข้อผิดพลาด: ${it.message}") }
         return response.choices.firstOrNull()?.message

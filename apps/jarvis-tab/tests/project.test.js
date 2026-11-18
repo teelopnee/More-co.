@@ -35,6 +35,16 @@ test('microphone foreground service is declared the way Android 14+ requires', (
   assert.match(manifest, /android:exported="false"/);
 });
 
+test('research keeps running when the app is closed (dataSync foreground service)', () => {
+  assert.match(manifest, /android\.permission\.FOREGROUND_SERVICE_DATA_SYNC/);
+  assert.match(manifest, /android\.permission\.WAKE_LOCK/);
+  assert.match(manifest, /android:name="\.research\.ResearchService"[\s\S]*?android:foregroundServiceType="dataSync"/);
+  const src = readFileSync(join(root, 'android/app/src/main/java/com/smott/jarvis/research/ResearchService.kt'), 'utf8');
+  assert.match(src, /FOREGROUND_SERVICE_TYPE_DATA_SYNC/);
+  // never stopService(): stopping before startForeground() crashes the app
+  assert.doesNotMatch(src, /stopService\(/);
+});
+
 test('no signing key or local config is committed', () => {
   const bad = walk(root).filter((p) => /\.(jks|keystore|p12|pfx)$/i.test(p) || /local\.properties$/.test(p));
   assert.deepEqual(bad, []);

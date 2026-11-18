@@ -30,6 +30,7 @@ import com.smott.jarvis.core.tools.FindVideosTool
 import com.smott.jarvis.core.llm.ModelCatalog
 import com.smott.jarvis.core.keys.KeyChecker
 import com.smott.jarvis.data.AppSettings
+import com.smott.jarvis.research.ResearchRunner
 import okhttp3.OkHttpClient
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
@@ -141,6 +142,9 @@ class AppContainer(context: Context) {
         if (Settings.canDrawOverlays(app) && runCatching { app.startActivity(intent) }.isSuccess) return
         WakeService.showWakePrompt(app, intent)
     }
+
+    /** งานค้นคำตอบ + บทสนทนา (อยู่ระดับแอป จึงค้นต่อได้แม้ปิดหน้าจอแอป) */
+    val research = ResearchRunner(app, agent, sessions, prepare = { ensureModel() }, appVisible = { wake.appVisible })
 
     private val ogCache = ConcurrentHashMap<String, String>()
 

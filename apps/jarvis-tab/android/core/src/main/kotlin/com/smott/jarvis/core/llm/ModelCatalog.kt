@@ -43,9 +43,10 @@ object ModelCatalog {
     }
 
     /**
-     * ลำดับรุ่นที่จะลองเมื่อรุ่นแรกไม่ว่าง — แผนฟรีเจอ 503 "high demand" บ่อย และมักเต็มพร้อมกันทั้งตระกูล Flash
-     * (ทดสอบจริง พ.ย. 2026: Flash ทุกรุ่น 503 แต่ Flash-Lite ตอบได้) จึงสลับ Flash กับ Flash-Lite:
-     * Flash ใหม่สุด → Lite ใหม่สุด → Flash รองลงมา → "flash-latest" → Lite รองลงมา → …
+     * ลำดับรุ่นที่จะลอง — Flash-Lite ก่อน แล้วสลับกับ Flash
+     * วัดจริง (18 พ.ย. 2026, แผนฟรี): Flash-Lite ตอบขั้นวางแผนใน ~5 วินาที ส่วนตระกูล Flash ตอบ 503 "high demand"
+     * หรือค้างเงียบเกิน 40 วินาทีบ่อย และ Gemini 3.8 Flash ฟรีได้แค่ 20 ครั้ง/วัน (1 คำถามใช้ ~4 ครั้ง)
+     * Lite ใหม่สุด → Flash ใหม่สุด → Lite รองลงมา → Flash รองลงมา → "flash-latest" → …
      */
     fun geminiCandidates(ids: List<String>, max: Int = 6): List<String> {
         val skip = Regex("(image|tts|audio|live|embed|exp|preview|thinking|vision|aqa|imagen|veo|learnlm|robotics|computer|omni|transcribe)", RegexOption.IGNORE_CASE)
@@ -56,8 +57,8 @@ object ModelCatalog {
         val lite = chat.filter { it.contains("flash-lite") && version(it) > 0 }.sortedByDescending { version(it) } +
             chat.filter { it == "gemini-flash-lite-latest" }
         val mixed = listOfNotNull(
-            flash.getOrNull(0), lite.getOrNull(0), flash.getOrNull(1), alias.firstOrNull(), lite.getOrNull(1), flash.getOrNull(2),
-        ) + flash.drop(3) + lite.drop(2)
+            lite.getOrNull(0), flash.getOrNull(0), lite.getOrNull(1), flash.getOrNull(1), alias.firstOrNull(), flash.getOrNull(2),
+        ) + lite.drop(2) + flash.drop(3)
         return mixed.distinct().take(max)
     }
 

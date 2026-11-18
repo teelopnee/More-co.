@@ -9,7 +9,7 @@ plugins {
 
 // scripts/build.mjs ส่งค่าพวกนี้มา (ค่าเริ่มต้นไว้สำหรับ build เองด้วยมือ)
 val versionCodeValue = System.getenv("JARVIS_VERSION_CODE")?.toIntOrNull() ?: 3
-val versionNameValue = System.getenv("JARVIS_VERSION_NAME") ?: "0.3.0"
+val versionNameValue = System.getenv("JARVIS_VERSION_NAME") ?: "0.4.0"
 // กุญแจเซ็นจริงไม่อยู่ใน repo: scripts/build.mjs เขียนไฟล์จาก GitHub Secret แล้วส่ง path มา
 // ไม่มี = เซ็นด้วยกุญแจ debug ของเครื่องที่ build (รุ่นทดลอง ติดตั้งทับรุ่นที่ build จากเครื่องอื่นไม่ได้)
 val keystoreFile = System.getenv("JARVIS_KEYSTORE")?.let { file(it) }?.takeIf { it.exists() }

@@ -3,13 +3,10 @@ package com.smott.jarvis
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.smott.jarvis.core.ConfigException
-import com.smott.jarvis.core.llm.LlmException
 import com.smott.jarvis.core.model.ChartRange
 import com.smott.jarvis.core.model.Session
 import com.smott.jarvis.core.model.Turn
 import com.smott.jarvis.core.model.TurnStatus
-import com.smott.jarvis.core.net.HttpError
 import com.smott.jarvis.core.net.resultOf
 import com.smott.jarvis.core.voice.VoiceCommand
 import com.smott.jarvis.core.keys.KeyCheck
@@ -17,27 +14,22 @@ import com.smott.jarvis.core.keys.KeyService
 import com.smott.jarvis.core.llm.ModelCatalog
 import com.smott.jarvis.core.voice.VoiceCommands
 import com.smott.jarvis.data.AppSettings
+import com.smott.jarvis.research.Finished
+import com.smott.jarvis.research.ResearchNotices
 import com.smott.jarvis.ui.narration
 import com.smott.jarvis.ui.panels.PanelKind
 import com.smott.jarvis.voice.MicState
 import com.smott.jarvis.wake.WakeService
 import com.smott.jarvis.wake.WakeStatus
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import java.io.InterruptedIOException
-import java.net.UnknownHostException
-import java.util.UUID
 
 /** สิ่งที่แสดงในแผงด้านข้าง: หน้าเว็บ หรือแผงคำตอบที่ปักไว้ */
 sealed interface Detail {
@@ -56,17 +48,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val speaking: StateFlow<Boolean> = c.speaker.speaking
     val wakeStatus: StateFlow<WakeStatus> = c.wake.status
 
-    private val _session = MutableStateFlow(blankSession())
-    val session: StateFlow<Session> = _session.asStateFlow()
-
-    private val _sessions = MutableStateFlow<List<Session>>(emptyList())
-    val sessions: StateFlow<List<Session>> = _sessions.asStateFlow()
+    /** บทสนทนาและงานค้นอยู่ที่ระดับแอป ([ResearchRunner]) — ปิดหน้าจอแอปแล้วงานยังค้นต่อ */
+    private val research = c.research
+    val session: StateFlow<Session> = research.session
+    val sessions: StateFlow<List<Session>> = research.sessions
+    val busy: StateFlow<Boolean> = research.busy
 
     private val _detail = MutableStateFlow<Detail?>(null)
     val detail: StateFlow<Detail?> = _detail.asStateFlow()
-
-    private val _busy = MutableStateFlow(false)
-    val busy: StateFlow<Boolean> = _busy.asStateFlow()
 
     private val _chartLoading = MutableStateFlow<Set<String>>(emptySet())
     val chartLoading: StateFlow<Set<String>> = _chartLoading.asStateFlow()
@@ -94,7 +83,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _focus = MutableStateFlow<TileFocus?>(null)
     val focus: StateFlow<TileFocus?> = _focus.asStateFlow()
 
-    private var job: Job? = null
     private var holdWatchdog: Job? = null
     private var walkSteps: List<Pair<String, String>> = emptyList()
     private var walkTurn: String? = null
@@ -104,12 +92,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private var micGranted = false
 
     init {
-        viewModelScope.launch {
-            c.sessions.latest()?.let { _session.value = it.recovered() }
-            refreshSessions()
-            if (settings.value.activeLlmKey.isBlank()) _settingsOpen.value = true
-        }
+        if (settings.value.activeLlmKey.isBlank()) _settingsOpen.value = true
         viewModelScope.launch { c.wake.wakes.collect { onWake() } }
+        viewModelScope.launch { research.finished.collect { onFinished(it) } }
         viewModelScope.launch {
             settings.collect { s ->
                 c.wake.threshold = s.wakeThreshold
@@ -125,6 +110,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         this.visible = visible
         this.micGranted = micGranted
         c.wake.appVisible = visible
+        // กลับมาที่แอปแล้ว คำตอบอยู่บนจอ ไม่ต้องค้างการแจ้งเตือน "ตอบแล้ว"
+        if (visible) ResearchNotices.clearResult(getApplication())
         syncWake()
     }
 
@@ -193,11 +180,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             VoiceCommand.Repeat -> repeatLast()
             VoiceCommand.Nothing -> Unit
             is VoiceCommand.Ask -> {
-                if (_busy.value) {
+                if (busy.value) {
                     // ถามเรื่องใหม่ระหว่างที่กำลังค้นเรื่องเก่า → หยุดเรื่องเก่าแล้วทำเรื่องใหม่
-                    val old = job
                     viewModelScope.launch {
-                        old?.cancelAndJoin()
+                        research.stopAndWait()
                         ask(cmd.text, fromVoice = true)
                     }
                 } else {
@@ -213,14 +199,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun repeatLast() {
-        val last = _session.value.turns.lastOrNull { it.status == TurnStatus.DONE }?.briefing?.spoken
+        val last = session.value.turns.lastOrNull { it.status == TurnStatus.DONE }?.briefing?.spoken
         if (last.isNullOrBlank()) say("ยังไม่มีคำตอบให้พูดซ้ำครับ") else c.speaker.speak(last, settings.value.voiceLanguage)
     }
 
     // ---------- อธิบายทีละแผง ("อธิบายให้ฟัง" / "walk me through it") ----------
 
     fun walkthrough(): Boolean {
-        val turn = _session.value.turns.lastOrNull { it.status == TurnStatus.DONE && it.briefing != null } ?: return false
+        val turn = session.value.turns.lastOrNull { it.status == TurnStatus.DONE && it.briefing != null } ?: return false
         val steps = narration(turn)
         if (steps.isEmpty()) return false
         c.speaker.stop()
@@ -256,72 +242,42 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun ask(raw: String, fromVoice: Boolean = false) {
         val question = raw.trim()
         if (question.isEmpty()) return
-        if (_busy.value) {
+        if (busy.value) {
             notify("กำลังตอบคำถามก่อนหน้าอยู่ — กดหยุดก่อนถ้าต้องการถามใหม่")
             return
         }
         stopWalkthrough()
         c.speaker.stop()
+        val history = session.value.turns.filter { it.status == TurnStatus.DONE }
+        if (research.ask(question, fromVoice)) pinPreviousForFollowUp(history)
+    }
 
-        val history = _session.value.turns.filter { it.status == TurnStatus.DONE }
-        val turn = Turn(id = newId(), question = question, askedAt = System.currentTimeMillis())
-        _session.update { s -> s.copy(title = s.title.ifBlank { question.take(60) }, turns = s.turns + turn) }
-        pinPreviousForFollowUp(history)
-        _busy.value = true
-
-        job = viewModelScope.launch {
-            try {
-                c.ensureModel()
-                val result = c.agent.run(
-                    question,
-                    history,
-                    onProgress = { sources, images ->
-                        // แผงทยอยขึ้นระหว่างค้น (ที่มา/คลิป/ภาพ)
-                        updateTurn(turn.id) { if (it.status == TurnStatus.RUNNING) it.copy(sources = sources, images = images) else it }
-                    },
-                ) { steps ->
-                    updateTurn(turn.id) { it.copy(trace = steps) }
-                }
-                updateTurn(turn.id) {
-                    it.copy(
-                        status = TurnStatus.DONE,
-                        briefing = result.briefing,
-                        sources = result.newSources,
-                        quotes = result.quotes,
-                        series = result.series,
-                        images = result.images,
-                    )
-                }
-                val s = settings.value
-                if (fromVoice && s.speakAnswers) {
-                    c.speaker.speak(result.briefing.spoken, s.voiceLanguage) {
-                        if (settings.value.conversationMode && !_busy.value) listenNow()
-                    }
-                }
-            } catch (e: CancellationException) {
-                updateTurn(turn.id) { it.copy(status = TurnStatus.CANCELLED, error = "หยุดแล้ว") }
-                throw e
-            } catch (e: Exception) {
-                updateTurn(turn.id) { it.copy(status = TurnStatus.FAILED, error = friendlyError(e)) }
-                if (fromVoice) say("ขอโทษครับ ${friendlyError(e)}")
-            } finally {
-                _busy.value = false
-                withContext(NonCancellable) { persist() }
-            }
+    /** คำตอบเสร็จ (แม้ระหว่างนั้นจะสลับไปแอปอื่น): ถามด้วยเสียง → อ่านคำตอบ แล้วฟังต่อถ้าเปิดโหมดสนทนา */
+    private fun onFinished(f: Finished) {
+        if (!f.fromVoice) return
+        val s = settings.value
+        if (f.error != null) {
+            say("ขอโทษครับ ${f.error}")
+            return
+        }
+        val spoken = f.spoken?.takeIf { it.isNotBlank() } ?: return
+        if (!s.speakAnswers) return
+        c.speaker.speak(spoken, s.voiceLanguage) {
+            if (settings.value.conversationMode && !busy.value && visible) listenNow()
         }
     }
 
     fun stop() {
-        job?.cancel()
+        research.stop()
         stopWalkthrough()
         c.speaker.stop()
         c.speech.cancel()
     }
 
     fun retry(turnId: String) {
-        val turn = _session.value.turns.firstOrNull { it.id == turnId } ?: return
-        if (_busy.value) return
-        _session.update { s -> s.copy(turns = s.turns.filterNot { it.id == turnId }) }
+        val turn = session.value.turns.firstOrNull { it.id == turnId } ?: return
+        if (busy.value) return
+        research.removeTurn(turnId)
         ask(turn.question)
     }
 
@@ -337,7 +293,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private fun pinPreviousForFollowUp(history: List<Turn>) {
         if (!wideLayout || _detail.value != null) return
         val prev = history.lastOrNull()?.takeIf { it.briefing != null } ?: return
-        if (prev.id in _session.value.turns.take(_hidden.value).map { it.id }) return
+        if (prev.id in session.value.turns.take(_hidden.value).map { it.id }) return
         val kind = if (prev.briefing?.chart != null && prev.series.isNotEmpty()) PanelKind.CHART else PanelKind.OVERVIEW
         _detail.value = Detail.Pinned(prev.id, kind)
     }
@@ -368,7 +324,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // ---------- กราฟ ----------
 
     fun changeRange(turnId: String, range: ChartRange) {
-        val turn = _session.value.turns.firstOrNull { it.id == turnId } ?: return
+        val turn = session.value.turns.firstOrNull { it.id == turnId } ?: return
         val chart = turn.briefing?.chart ?: return
         if (turnId in _chartLoading.value) return
         viewModelScope.launch {
@@ -381,14 +337,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     notify(if (c.market.historyAvailable) "ดึงกราฟช่วง ${range.label} ไม่สำเร็จ" else "ต้องใส่ Twelve Data key ก่อน")
                     return@launch
                 }
-                updateTurn(turnId) { t ->
+                research.updateTurn(turnId) { t ->
                     val kept = t.series.filterNot { s -> fetched.any { it.symbol == s.symbol && it.range == s.range } }
                     t.copy(
                         series = kept + fetched,
                         briefing = t.briefing?.copy(chart = chart.copy(range = range.label)),
                     )
                 }
-                persist()
+                research.persist()
             } finally {
                 _chartLoading.update { it - turnId }
             }
@@ -398,7 +354,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // ---------- แผงด้านข้าง ----------
 
     fun openSource(id: String) {
-        val source = _session.value.turns.asSequence().flatMap { it.sources }.firstOrNull { it.id == id } ?: return
+        val source = session.value.turns.asSequence().flatMap { it.sources }.firstOrNull { it.id == id } ?: return
         openUrl(source.url, source.title)
     }
 
@@ -417,26 +373,24 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // ---------- เซสชัน ----------
 
     fun clearView() {
-        _hidden.value = _session.value.turns.count { it.status != TurnStatus.RUNNING }
+        _hidden.value = session.value.turns.count { it.status != TurnStatus.RUNNING }
         _detail.value = null
         stopWalkthrough()
     }
 
     fun newSession() {
-        if (_busy.value) stop()
+        if (busy.value) stop()
         stopWalkthrough()
-        _session.value = blankSession()
+        research.newSession()
         _hidden.value = 0
         _detail.value = null
         _historyOpen.value = false
-        viewModelScope.launch { refreshSessions() }
     }
 
     fun openSession(id: String) {
-        if (_busy.value) return
+        if (busy.value) return
         viewModelScope.launch {
-            c.sessions.load(id)?.let {
-                _session.value = it.recovered()
+            if (research.open(id)) {
                 _hidden.value = 0
                 _detail.value = null
                 stopWalkthrough()
@@ -447,12 +401,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun deleteSession(id: String) {
         viewModelScope.launch {
-            c.sessions.delete(id)
-            if (_session.value.id == id) {
-                _session.value = blankSession()
-                _hidden.value = 0
-            }
-            refreshSessions()
+            val current = session.value.id == id
+            research.delete(id)
+            if (current) _hidden.value = 0
         }
     }
 
@@ -492,61 +443,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     suspend fun openRouterModels(): Result<List<ModelCatalog.Choice>> = resultOf { c.openRouterChoices() }
 
+    /** ปิดหน้าจอแอป: หยุดฟัง/พูด แต่ไม่หยุดงานค้น (ค้นต่อเบื้องหลังแล้วแจ้งเตือนเมื่อเสร็จ) */
     override fun onCleared() {
         c.speech.cancel()
         c.speaker.stop()
         c.wake.release(HOLD_LISTEN)
         super.onCleared()
-    }
-
-    // ---------- ภายใน ----------
-
-    private fun updateTurn(id: String, change: (Turn) -> Turn) {
-        _session.update { s -> s.copy(turns = s.turns.map { if (it.id == id) change(it) else it }) }
-    }
-
-    private suspend fun persist() {
-        runCatching { c.sessions.save(_session.value) }
-        refreshSessions()
-    }
-
-    private suspend fun refreshSessions() {
-        _sessions.value = runCatching { c.sessions.list() }.getOrDefault(emptyList())
-    }
-
-    private fun blankSession() = Session(id = newId(), createdAt = System.currentTimeMillis())
-
-    private fun newId() = UUID.randomUUID().toString()
-
-    /** คำถามที่ค้างอยู่ตอนแอปถูกปิด ให้ขึ้นเป็น "ถูกขัดจังหวะ" กดลองใหม่ได้ */
-    private fun Session.recovered(): Session = copy(
-        turns = turns.map {
-            if (it.status == TurnStatus.RUNNING) it.copy(status = TurnStatus.FAILED, error = "ถูกขัดจังหวะ — กดลองใหม่ได้") else it
-        }
-    )
-
-    private fun friendlyError(e: Exception): String = when (e) {
-        is ConfigException -> e.message.orEmpty()
-        is HttpError -> when (e.code) {
-            401, 403 -> if (e.body.contains("suspended", ignoreCase = true)) {
-                "โปรเจกต์ Google ของคีย์นี้ถูกระงับ — สร้างคีย์ใหม่ (โปรเจกต์ใหม่) ที่ aistudio.google.com แล้วใส่ในหน้าตั้งค่า"
-            } else {
-                "คีย์ API ของ ${e.host} ไม่ถูกต้องหรือไม่มีสิทธิ์ — ตรวจในหน้าตั้งค่า"
-            }
-            402 -> "เครดิตของ ${e.host} หมด"
-            404 -> "ไม่พบปลายทางที่ ${e.host} — ตรวจ Base URL / ชื่อโมเดลในหน้าตั้งค่า"
-            429 -> if (e.body.contains("quota", ignoreCase = true) || e.body.contains("per day", ignoreCase = true)) {
-                "โควตาฟรีของ ${e.host} หมดแล้ว (รีเซ็ตทุกวัน/ทุกนาที) รอสักครู่หรือลองพรุ่งนี้"
-            } else {
-                "${e.host} จำกัดจำนวนครั้งต่อนาที รอสักครู่แล้วลองใหม่"
-            }
-            in 500..599 -> "${e.host} ขัดข้องชั่วคราว ลองใหม่อีกครั้ง"
-            else -> "ข้อผิดพลาดจาก ${e.host} (${e.code})"
-        }
-        is UnknownHostException -> "ไม่มีอินเทอร์เน็ต"
-        is InterruptedIOException -> "เครือข่ายช้าเกินไป ลองใหม่อีกครั้ง"
-        is LlmException -> e.message.orEmpty()
-        else -> e.message ?: e.javaClass.simpleName
     }
 
     private companion object {
